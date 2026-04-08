@@ -1,0 +1,81 @@
+services:
+  db:
+    image: timescale/timescaledb@sha256:53325a1a105984bfae4aefb36e6bb22d7941d47faf95a9b2173fb6dc5c7f4e00
+    environment:
+      POSTGRES_DB: aicontroller
+      POSTGRES_USER: aicontroller
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aicontroller00}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aicontroller -d aicontroller"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://aicontroller:${POSTGRES_PASSWORD:-aicontroller00}@db:5432/aicontroller
+      DATABASE_URL_SYNC: postgresql://aicontroller:${POSTGRES_PASSWORD:-aicontroller00}@db:5432/aicontroller
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-prod}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-password12345}
+      API_SOURCE_ALLOWLIST: ${API_SOURCE_ALLOWLIST:-}
+      MAX_INGEST_FILE_BYTES: ${MAX_INGEST_FILE_BYTES:-10485760}
+      MAX_INGEST_ROWS: ${MAX_INGEST_ROWS:-200000}
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./outputs:/app/outputs
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    environment:
+      DATABASE_URL_SYNC: postgresql://aicontroller:${POSTGRES_PASSWORD:-aicontroller00}@db:5432/aicontroller
+      RISK_THRESHOLD: ${RISK_THRESHOLD:-0.55}
+      ALERT_COOLDOWN_HOURS: ${ALERT_COOLDOWN_HOURS:-1}
+      INFERENCE_LOOKBACK_HOURS: ${INFERENCE_LOOKBACK_HOURS:-24}
+      COOLING_POWER_RATIO: ${COOLING_POWER_RATIO:-0.24}
+      CONTROL_MODE: ${CONTROL_MODE:-advisory}
+      MODEL_PATH: ${MODEL_PATH:-/app/outputs/models/phase4_best_model.joblib}
+      POLICY_OPTIMIZER_ENABLED: "${POLICY_OPTIMIZER_ENABLED:-true}"
+      AUTOMATION_REQUIRE_POLICY_BACKTEST: "${AUTOMATION_REQUIRE_POLICY_BACKTEST:-true}"
+      POLICY_MIN_UPLIFT_USD_PER_MINER: "${POLICY_MIN_UPLIFT_USD_PER_MINER:-0.25}"
+      ENERGY_PRICE_USD_PER_KWH: "${ENERGY_PRICE_USD_PER_KWH:-0.08}"
+      HASHPRICE_USD_PER_PH_DAY: "${HASHPRICE_USD_PER_PH_DAY:-55}"
+      OPEX_USD_PER_MWH: "${OPEX_USD_PER_MWH:-8}"
+      CAPEX_USD_PER_MWH: "${CAPEX_USD_PER_MWH:-20}"
+      ENERGY_PRICE_SCHEDULE_JSON: "${ENERGY_PRICE_SCHEDULE_JSON:-}"
+      CURTAILMENT_WINDOWS_JSON: "${CURTAILMENT_WINDOWS_JSON:-}"
+      CURTAILMENT_PENALTY_MULTIPLIER: "${CURTAILMENT_PENALTY_MULTIPLIER:-2.0}"
+      POLICY_REWARD_PER_TH_HOUR_USD: "${POLICY_REWARD_PER_TH_HOUR_USD:-0.0022916667}"
+      POLICY_FAILURE_COST_USD: "${POLICY_FAILURE_COST_USD:-300}"
+      POLICY_HORIZON_HOURS: "${POLICY_HORIZON_HOURS:-1.0}"
+      RISK_PROBABILITY_HORIZON_HOURS: "${RISK_PROBABILITY_HORIZON_HOURS:-24}"
+      POLICY_TIMEZONE: "${POLICY_TIMEZONE:-UTC}"
+      POLICY_BACKTEST_REPORT_PATH: "${POLICY_BACKTEST_REPORT_PATH:-/app/outputs/metrics/policy_backtest_latest.json}"
+      API_SOURCE_ALLOWLIST: ${API_SOURCE_ALLOWLIST:-}
+      AUTOMATOR_SIMULATION: ${AUTOMATOR_SIMULATION:-true}
+      AUTOMATOR_ENDPOINT_TEMPLATE: ${AUTOMATOR_ENDPOINT_TEMPLATE:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./outputs:/app/outputs
+    restart: unless-stopped
+
+volumes:
+  pgdata:

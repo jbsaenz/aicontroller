@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Controller — Predictive Maintenance</title>
+  <meta name="description" content="Real-time ASIC miner fleet monitoring and predictive maintenance powered by AI"/>
+  <link rel="stylesheet" href="/assets/style.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ── Login Page ──────────────────────────────────────────────────────── -->
+<div id="login-page">
+  <div class="login-card">
+    <div class="login-logo">⚡ AI Controller</div>
+    <div class="login-subtitle">ASIC Fleet Predictive Maintenance</div>
+    <form id="login-form">
+      <div class="field-group">
+        <label for="login-user">Username</label>
+        <input id="login-user" type="text" placeholder="admin" autocomplete="username" required/>
+      </div>
+      <div class="field-group">
+        <label for="login-pass">Password</label>
+        <input id="login-pass" type="password" placeholder="••••••••••" autocomplete="current-password" required/>
+      </div>
+      <button type="submit" class="btn btn-primary">Sign In</button>
+      <div id="login-error" class="login-error"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ── App Shell ───────────────────────────────────────────────────────── -->
+<div id="app">
+  <div class="app-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-text">⚡ AI Controller</div>
+        <div class="logo-sub">Predictive Maintenance</div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-item active" data-page="fleet">
+          <span class="nav-icon">🗂</span> Fleet Overview
+        </div>
+        <div class="nav-item" data-page="analytics">
+          <span class="nav-icon">📊</span> Analytics
+        </div>
+        <div class="nav-item" data-page="alerts">
+          <span class="nav-icon">🔔</span> Alert Center
+          <span id="alert-badge" class="nav-badge" style="display:none">0</span>
+        </div>
+        <div class="nav-item" data-page="ingest">
+          <span class="nav-icon">📥</span> Data Ingestion
+        </div>
+        <div class="nav-item" data-page="settings">
+          <span class="nav-icon">⚙️</span> Settings
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="user" id="sidebar-user">admin</div>
+        <div class="logout" id="logout-btn">Sign out</div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main-content">
+      <div class="topbar">
+        <div class="topbar-title">Fleet Overview</div>
+        <div class="topbar-right">
+          <span class="text-muted text-sm">Auto-refresh: 30s</span>
+        </div>
+      </div>
+
+      <!-- ── Fleet Page ───────────────────────────────────────────────── -->
+      <div class="page active" id="page-fleet">
+        <div class="stats-bar">
+          <div class="stat-card">
+            <div class="stat-label">Total Miners</div>
+            <div class="stat-value" id="stat-total">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Hashrate</div>
+            <div class="stat-value ok" id="stat-hash">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Avg Temperature</div>
+            <div class="stat-value" id="stat-temp">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Critical</div>
+            <div class="stat-value crit" id="stat-critical">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">High Risk</div>
+            <div class="stat-value warn" id="stat-high">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Healthy</div>
+            <div class="stat-value ok" id="stat-healthy">0</div>
+          </div>
+        </div>
+
+        <div class="fleet-controls">
+          <input id="fleet-search" class="search-input" type="text" placeholder="🔍  Search miner ID..."/>
+          <select id="fleet-filter" class="filter-select">
+            <option value="all">All Risk Levels</option>
+            <option value="critical">🔴 Critical</option>
+            <option value="high">🟠 High</option>
+            <option value="medium">🟡 Medium</option>
+            <option value="low">🟢 Low</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="loadFleet()">↻ Refresh</button>
+        </div>
+
+        <div id="miner-grid" class="miner-grid">
+          <div class="loading">Loading fleet data...</div>
+        </div>
+      </div>
+
+      <!-- ── Analytics Page ───────────────────────────────────────────── -->
+      <div class="page" id="page-analytics">
+        <div class="section-header" style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+          <span class="section-title" style="font-size: 20px; font-weight: 600; color: #f8fafc;">Analytics Dashboard</span>
+          <select id="analytics-range" class="filter-select" onchange="loadAnalytics(parseInt(this.value))">
+            <option value="24">Last 24 Hours</option>
+            <option value="168">Last 7 Days</option>
+            <option value="720" selected>Last 30 Days</option>
+          </select>
+        </div>
+        <div class="analytics-grid">
+          <div class="analytics-card full-width">
+            <div class="analytics-card-title">📈 Correlation Matrix — Key ASIC Metrics</div>
+            <div style="overflow-x:auto">
+              <canvas id="corr-canvas" width="600" height="280"></canvas>
+            </div>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-title">⚡ Power vs Hashrate (by Mode)</div>
+            <canvas id="to-power-hash"></canvas>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-title">🌡 Temperature vs Hashrate</div>
+            <canvas id="to-temp-hash"></canvas>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-title">🔄 Clock vs Hashrate</div>
+            <canvas id="to-clock-hash"></canvas>
+          </div>
+          <div class="analytics-card">
+            <div class="analytics-card-title">⚡ Voltage vs Temperature</div>
+            <canvas id="to-voltage-temp"></canvas>
+          </div>
+          <div class="analytics-card full-width">
+            <div class="analytics-card-title">⚠️ Anomalies (Last 24h, Z-Score &gt; 3σ)</div>
+            <div class="alert-table-wrap">
+              <table>
+                <thead><tr><th>Miner</th><th>Timestamp</th><th>Field</th><th>Value</th><th>Z-Score</th><th>Severity</th></tr></thead>
+                <tbody id="anomaly-tbody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Alerts Page ───────────────────────────────────────────────── -->
+      <div class="page" id="page-alerts">
+        <div class="section-header">
+          <span class="section-title">Active Alerts</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadAlerts()">↻ Refresh</button>
+        </div>
+        <div class="alert-table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Miner</th><th>Severity</th><th>Risk</th><th>Reason</th><th>Recommended Action</th><th>Delivery</th><th>Resolve</th></tr></thead>
+            <tbody id="alerts-tbody"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Ingestion Page ────────────────────────────────────────────── -->
+      <div class="page" id="page-ingest">
+        <div class="dropzone" id="dropzone">
+          <div class="dropzone-icon">📂</div>
+          <div class="dropzone-label">
+            <span>Click to upload</span> or drag &amp; drop a CSV file<br/>
+            <small class="text-muted">Required columns: timestamp, miner_id | Optional: asic_clock_mhz, asic_voltage_v, asic_hashrate_ths, asic_temperature_c, asic_power_w</small>
+          </div>
+          <input id="file-input" type="file" accept=".csv" style="display:none"/>
+        </div>
+        <div class="progress-bar-wrap" id="upload-progress"><div class="progress-bar-fill" style="width:0%"></div></div>
+        <div class="upload-result" id="upload-result"></div>
+        <div class="upload-error" id="upload-error"></div>
+
+        <div class="section-header mt-16">
+          <span class="section-title">External API Sources</span>
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('add-source-panel').classList.toggle('hidden')">+ Add Source</button>
+        </div>
+
+        <div id="add-source-panel" class="hidden" style="background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);padding:20px;margin-bottom:20px">
+          <div id="source-allowlist-info" class="source-validation source-validation-neutral" style="margin-bottom:12px;display:none"></div>
+          <form id="add-source-form" style="display:grid;grid-template-columns:1fr 2fr 100px 120px;gap:12px;align-items:end">
+            <div class="settings-field" style="margin:0"><label>Source Name</label><input name="source_name" placeholder="e.g. Farm A" required/></div>
+            <div class="settings-field" style="margin:0"><label>API URL</label><input name="source_url" placeholder="https://api.example.com/miners" required/></div>
+            <div class="settings-field" style="margin:0"><label>Interval (min)</label><input name="source_interval" type="number" value="10" min="1"/></div>
+            <div style="display:flex;align-items:flex-end"><button type="button" id="validate-source-btn" class="btn btn-ghost btn-sm" style="width:100%">Validate URL</button></div>
+            <div id="source-validate-status" class="source-validation source-validation-neutral" style="grid-column:1/-1;display:none"></div>
+            <div style="grid-column:1/-1;display:flex;gap:8px">
+              <button type="submit" class="btn btn-primary btn-sm">Save Source</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('add-source-panel').classList.add('hidden')">Cancel</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="alert-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>URL</th><th>Interval</th><th>Last Fetched</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="sources-tbody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Settings Page ─────────────────────────────────────────────── -->
+      <div class="page" id="page-settings">
+        <form id="settings-form">
+          <div class="settings-grid">
+            <div class="settings-section">
+              <div class="settings-section-title">✉️ Email (SMTP)</div>
+              <div class="settings-field"><label>SMTP Host</label><input id="setting-smtp-host" placeholder="smtp.gmail.com"/></div>
+              <div class="settings-field"><label>SMTP Port</label><input id="setting-smtp-port" placeholder="587"/></div>
+              <div class="settings-field"><label>SMTP User</label><input id="setting-smtp-user" placeholder="you@gmail.com"/></div>
+              <div class="settings-field"><label>SMTP Password</label><input id="setting-smtp-password" type="password" placeholder="app password"/></div>
+              <div class="settings-field"><label>From Email</label><input id="setting-alert-from-email" placeholder="alerts@yourdomain.com"/></div>
+              <div class="settings-field"><label>To Emails (comma separated)</label><input id="setting-alert-to-emails" placeholder="ops@company.com, team@company.com"/></div>
+            </div>
+            <div class="settings-section">
+              <div class="settings-section-title">📨 Telegram</div>
+              <div class="settings-field"><label>Bot Token</label><input id="setting-telegram-bot-token" placeholder="1234567890:ABC..."/></div>
+              <div class="settings-field"><label>Chat ID</label><input id="setting-telegram-chat-id" placeholder="-100123456789"/></div>
+              <div class="settings-section-title" style="margin-top:24px">🤖 ML Thresholds</div>
+              <div class="settings-field"><label>Risk Score Threshold (0–1)</label><input id="setting-risk-threshold" placeholder="0.55" type="number" step="0.05" min="0" max="1"/></div>
+              <div class="settings-field"><label>Alert Cooldown (hours)</label><input id="setting-alert-cooldown-hours" placeholder="1" type="number" min="0"/></div>
+              <div class="settings-section-title" style="margin-top:24px">📉 Policy Optimization</div>
+              <div class="settings-field"><label>Policy Optimizer Enabled</label><input id="setting-policy-optimizer-enabled" placeholder="true"/></div>
+              <div class="settings-field"><label>Require Backtest for Automation</label><input id="setting-automation-require-policy-backtest" placeholder="true"/></div>
+              <div class="settings-field"><label>Min Uplift USD / Miner</label><input id="setting-policy-min-uplift-usd-per-miner" placeholder="0.25" type="number" step="0.01"/></div>
+              <div class="settings-field"><label>Energy Price USD/kWh</label><input id="setting-energy-price-usd-per-kwh" placeholder="0.08" type="number" step="0.01" min="0"/></div>
+              <div class="settings-field"><label>Hashprice USD / PH / Day</label><input id="setting-hashprice-usd-per-ph-day" placeholder="55" type="number" step="0.1" min="0"/></div>
+              <div class="settings-field"><label>Opex USD / MWh</label><input id="setting-opex-usd-per-mwh" placeholder="8" type="number" step="0.1" min="0"/></div>
+              <div class="settings-field"><label>Capex Amortized USD / MWh</label><input id="setting-capex-usd-per-mwh" placeholder="20" type="number" step="0.1" min="0"/></div>
+              <div class="settings-field"><label>Energy Price Schedule JSON</label><input id="setting-energy-price-schedule-json" placeholder='{"17":0.14,"18":0.14}'/></div>
+              <div class="settings-field"><label>Curtailment Windows JSON</label><input id="setting-curtailment-windows-json" placeholder='[{"start_hour":17,"end_hour":21}]'/></div>
+              <div class="settings-field"><label>Curtailment Penalty Multiplier</label><input id="setting-curtailment-penalty-multiplier" placeholder="1.5" type="number" step="0.1" min="1"/></div>
+              <div class="settings-field"><label>Fallback Revenue USD per TH-hour</label><input id="setting-policy-reward-per-th-hour-usd" placeholder="0.0025" type="number" step="0.0001" min="0"/></div>
+              <div class="settings-field"><label>Failure Cost USD</label><input id="setting-policy-failure-cost-usd" placeholder="120" type="number" step="1" min="0"/></div>
+              <div class="settings-field"><label>Policy Horizon Hours</label><input id="setting-policy-horizon-hours" placeholder="1.0" type="number" step="0.25" min="0.25"/></div>
+              <div class="settings-field"><label>Risk Probability Horizon Hours</label><input id="setting-risk-probability-horizon-hours" placeholder="24" type="number" step="1" min="1"/></div>
+              <div class="settings-field"><label>Policy Timezone</label><input id="setting-policy-timezone" placeholder="UTC"/></div>
+            </div>
+          </div>
+          <div style="margin-top:20px">
+            <button type="submit" class="btn btn-primary" style="width:auto;padding:10px 28px">Save Settings</button>
+          </div>
+        </form>
+      </div>
+
+    </div><!-- /main-content -->
+  </div><!-- /app-layout -->
+</div><!-- /app -->
+
+<!-- ── Miner Detail Modal ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="miner-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">⛏ Miner Detail — <span id="modal-miner-id"></span></div>
+      <div class="modal-close" id="modal-close">✕</div>
+    </div>
+    <div class="modal-body">
+      <div class="chart-grid">
+        <div class="chart-box"><div class="chart-box-title">🌡 Temperature (°C)</div><canvas id="chart-temp"></canvas></div>
+        <div class="chart-box"><div class="chart-box-title">⚡ Hashrate (TH/s)</div><canvas id="chart-hash"></canvas></div>
+        <div class="chart-box"><div class="chart-box-title">🔋 Power (W)</div><canvas id="chart-power"></canvas></div>
+        <div class="chart-box"><div class="chart-box-title">📈 Risk Score (%)</div><canvas id="chart-risk"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>

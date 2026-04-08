@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+.DS_Store
+
+# Generated artifacts
+outputs/figures/*
+outputs/metrics/*
+outputs/predictions/*
+outputs/models/*
+data/raw/synthetic_telemetry.csv
+data/processed/*.csv
+data/processed/*.parquet
+
+# Keep folder structure
+!outputs/figures/.gitkeep
+!outputs/metrics/.gitkeep
+!outputs/predictions/.gitkeep
+!outputs/models/.gitkeep
+
+# Local OCR/export artifacts
+outputs/ocr_pages/*
+outputs/assignment_extracted.txt
+page-01.png
+submission/*.zip

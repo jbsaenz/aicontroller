@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile checks
+        run: |
+          python -m py_compile src/config.py src/data_generation.py src/ingestion.py src/preprocessing.py src/kpi.py src/eda.py src/visualization.py src/feature_engineering.py src/evaluation.py src/inference.py src/train.py src/phase5.py src/pipeline.py
+
+      - name: Run phase2 smoke test
+        run: |
+          python src/pipeline.py --phase phase2 --n-miners 8 --days 2 --freq-minutes 30 --prediction-horizon-hours 12
+
+      - name: Run phase3 smoke test
+        run: |
+          python src/pipeline.py --phase phase3
+
+      - name: Run phase4 smoke test
+        run: |
+          python src/pipeline.py --phase phase4
+
+      - name: Run phase5 smoke test
+        run: |
+          python src/pipeline.py --phase phase5

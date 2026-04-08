@@ -1,0 +1,25 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.ipynb_checkpoints
+.DS_Store
+
+# local generated artifacts
+outputs/figures/*
+outputs/metrics/*
+outputs/predictions/*
+outputs/models/*
+data/raw/synthetic_telemetry.csv
+data/processed/*.csv
+data/processed/*.parquet
+
+# keep lightweight placeholders and docs
+!outputs/figures/.gitkeep
+!outputs/metrics/.gitkeep
+!outputs/predictions/.gitkeep
+!outputs/models/.gitkeep
+!data/raw/data_dictionary.md
+!data/raw/.gitkeep
+!data/processed/.gitkeep

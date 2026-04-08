@@ -1,0 +1,40 @@
+flowchart LR
+    A["ASIC Miners + Environment"]
+    B["Telemetry Source (Synthetic/MDK)"]
+    C["Ingestion + Schema Validation"]
+    D["Preprocessing + Data Quality Repair"]
+    E["Tier 1 EDA + Anomaly Profiling"]
+    F["True Efficiency (TE) KPI Engine"]
+    G["Feature Engineering (Temporal + Peer Baselines)"]
+    H["Supervised Model Training (LR/RF)"]
+    I["Inference: Risk Scores per Miner-Time"]
+    J["Threshold Policy Layer (Balanced/Conservative)"]
+    K["Priority Alerts + Flagged Miner Ranking"]
+    L["Human Operator Review"]
+    M["Maintenance / Mode Adjustment Action"]
+    N["Metrics + Figures + Reports Artifacts"]
+    O["Model Artifact + Deployment (Docker/GitHub CI)"]
+
+    A --> B --> C --> D
+    D --> E
+    D --> F
+    F --> G
+    G --> H --> I --> J --> K --> L --> M
+    E --> N
+    F --> N
+    H --> N
+    K --> N
+    H --> O
+    N --> O
+
+    subgraph S["Safety/Security Controls"]
+      S1["Data integrity checks"]
+      S2["Conservative threshold option"]
+      S3["Human-in-the-loop gate"]
+      S4["Default advisory mode; optional gated actuation"]
+    end
+
+    C --> S1
+    J --> S2
+    L --> S3
+    M --> S4
