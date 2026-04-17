@@ -223,12 +223,14 @@ Priority next steps:
 ## 10. Reproducibility and Verification
 Recommended verification flow:
 1. **Primary (Docker runtime):** run the full stack with Docker Compose for production-like behavior (DB + API + worker).
-2. **Offline analytics/modeling path (Python):** run the full pipeline (`phase2-5`) to regenerate analysis/model artifacts.
-3. Validate model artifact, metrics JSONs, and figures.
-4. Run tests for regression/integration checks.
+2. Sign in at `http://localhost:8080` using default credentials (`admin` / `admin`), then if Fleet is empty on a fresh install, click **Load Sample Data** in the Fleet page (calls `POST /api/ingest/seed-demo`).
+3. **Offline analytics/modeling path (Python):** run the full pipeline (`phase2-5`) to regenerate analysis/model artifacts.
+4. Validate model artifact, metrics JSONs, and figures.
+5. Run tests for regression/integration checks.
 
 Suggested commands:
 - Docker runtime: `docker compose up -d --build`
+- First-run onboarding API equivalent: `POST /api/ingest/seed-demo` (triggered by Fleet UI button **Load Sample Data**)
 - Offline pipeline (inside venv): `PYTHONPATH=. python -m src.pipeline --phase phase2-5`
 - Tests: `./.venv/bin/pytest -q`
 
@@ -236,6 +238,7 @@ Cross-platform note:
 - The Docker Compose workflow is designed to run the same on **macOS** and **Windows** (via Docker Desktop).
 - Minor differences are limited to shell/path syntax (PowerShell/WSL vs. zsh/bash), not system behavior.
 - On either OS, ensure required ports (e.g., `8080`, `5433`) are available before starting the stack.
+- For credentials, `.env.example` ships with a Docker Compose-safe escaped bcrypt hash format (`$$2b$$12$$...`). If you set a custom hash, keep `$` escaped as `$$` in `.env`.
 
 Core reproducibility artifacts:
 - `outputs/metrics/phase3_kpi_summary.json`
