@@ -13,10 +13,20 @@ This guide covers how to build, validate, and refresh the Phase 4 model artifact
 - Optional: Docker stack running if you want to test the artifact end-to-end after build
 
 ## 1) Prepare environment
+
+macOS/Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Windows PowerShell:
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -62,12 +72,39 @@ If running via Docker Compose with default bind mounts, local `./outputs` is vis
 ## 5) Validate in running stack
 If stack is up:
 
+Set script credentials before running:
+
+macOS/Linux:
+```bash
+export E2E_ADMIN_USERNAME=admin
+export E2E_ADMIN_PASSWORD=admin
+```
+
+Windows PowerShell:
+```powershell
+$env:E2E_ADMIN_USERNAME = "admin"
+$env:E2E_ADMIN_PASSWORD = "admin"
+```
+
+Preferred cross-platform validation:
+
+macOS/Linux:
+```bash
+python3 generate_large_fleet.py
+```
+
+Windows PowerShell:
+```powershell
+python .\generate_large_fleet.py
+```
+
+Optional CI/Linux deep validation:
 ```bash
 python test_e2e.py
 python test_e2e_advanced.py
 ```
 
-Both should complete without worker inference errors.
+The scripts should complete without worker inference errors.
 
 ## Troubleshooting
 - Missing artifact at inference time:

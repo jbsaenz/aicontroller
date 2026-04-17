@@ -10,7 +10,7 @@ For model artifact generation and validation, see `model-generation.md`.
 - Persistent state: `pgdata` Docker volume (database) and `./outputs` bind mount (model artifacts, metrics, reports)
 
 ## Common prerequisites
-- Linux/macOS host with Docker Engine + Docker Compose v2
+- Docker Desktop (Windows/macOS) or Docker Engine + Docker Compose v2 (Linux)
 - 4+ vCPU, 8+ GB RAM recommended
 - Git
 - Network access for external source polling only to allowlisted endpoints
@@ -22,8 +22,15 @@ git clone https://github.com/<owner>/<repo>.git
 cd <repo>
 ```
 2. Create env file:
+
+macOS/Linux:
 ```bash
 cp .env.example .env
+```
+
+Windows PowerShell:
+```powershell
+Copy-Item .env.example .env
 ```
 3. Set required secrets and credentials in `.env`:
 - `POSTGRES_PASSWORD`
@@ -42,6 +49,8 @@ Use this for developer validation and quick smoke tests.
 
 ### Local start
 1. Optional model build (recommended so worker uses ML inference):
+
+macOS/Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -49,21 +58,74 @@ pip install --upgrade pip
 pip install -r requirements.txt
 python src/pipeline.py --phase phase2-5
 ```
+
+Windows PowerShell:
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python .\src\pipeline.py --phase phase2-5
+```
 2. Start stack:
 ```bash
 docker compose up -d --build
 ```
 3. Verify:
+
+macOS/Linux:
 ```bash
 docker compose ps
 curl -s http://localhost:8080/api/health
 ```
+
+Windows PowerShell:
+```powershell
+docker compose ps
+Invoke-RestMethod -Uri http://localhost:8080/api/health
+```
 4. Access dashboard at `http://localhost:8080`.
 
+### Local first-run troubleshooting
+- If login with `admin` / `admin` fails, validate `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in `.env` and rebuild:
+```bash
+docker compose up -d --build
+```
+- Bcrypt hashes contain `$` characters. If Docker Compose reports interpolation warnings (for example about unset vars like `2b` or `12`), escape each `$` as `$$` in `.env` (`$2b$12$...` becomes `$$2b$$12$$...`).
+- If login succeeds but the dashboard is empty, this is expected on a fresh database until telemetry is ingested.
+- Seed synthetic telemetry and force KPI/inference/alert processing:
+
+macOS/Linux:
+```bash
+export E2E_ADMIN_USERNAME=admin
+export E2E_ADMIN_PASSWORD=admin
+python3 generate_large_fleet.py
+```
+
+Windows PowerShell:
+```powershell
+$env:E2E_ADMIN_USERNAME = "admin"
+$env:E2E_ADMIN_PASSWORD = "admin"
+python .\generate_large_fleet.py
+```
+
+- If data still does not appear, check worker logs for `KPI`/`Inference` execution:
+```bash
+docker compose logs worker --tail=200
+```
+
 ### Local reset (destructive)
+
+macOS/Linux:
 ```bash
 docker compose down -v
 rm -rf outputs/*
+```
+
+Windows PowerShell:
+```powershell
+docker compose down -v
+Remove-Item .\outputs\* -Recurse -Force
 ```
 
 ## Staging environment
@@ -98,9 +160,29 @@ docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_d
 ```
 `apply_dedup_indexes.sql` deletes duplicate rows from telemetry hypertables before creating unique indexes. Run only during maintenance and after a successful backup.
 5. Validate:
+
+macOS/Linux:
 ```bash
 docker compose ps
 curl -s http://localhost:8080/api/health
+export E2E_ADMIN_USERNAME=admin
+export E2E_ADMIN_PASSWORD=admin
+python3 generate_large_fleet.py
+```
+
+Windows PowerShell:
+```powershell
+docker compose ps
+Invoke-RestMethod -Uri http://localhost:8080/api/health
+$env:E2E_ADMIN_USERNAME = "admin"
+$env:E2E_ADMIN_PASSWORD = "admin"
+python .\generate_large_fleet.py
+```
+
+For scripted end-to-end tests in CI/Linux environments:
+```bash
+export E2E_ADMIN_USERNAME=admin
+export E2E_ADMIN_PASSWORD=admin
 python test_e2e.py
 python test_e2e_advanced.py
 ```
@@ -209,9 +291,17 @@ Run restore only during a maintenance window or against a non-production clone f
 
 ## Operations checks
 ### Health and status
+
+macOS/Linux:
 ```bash
 docker compose ps
 curl -s http://localhost:8080/api/health
+```
+
+Windows PowerShell:
+```powershell
+docker compose ps
+Invoke-RestMethod -Uri http://localhost:8080/api/health
 ```
 
 ### Logs

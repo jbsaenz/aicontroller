@@ -41,7 +41,7 @@ For detailed model build and validation steps, see `docs/model-generation.md`.
 
 ### Prerequisites
 - Git
-- Docker Engine + Docker Compose v2 plugin
+- Docker Desktop (Windows/macOS) or Docker Engine + Docker Compose v2 plugin (Linux)
 - At least 4 vCPU and 8 GB RAM recommended for local production-like runs
 - Optional for offline model build: Python 3.11+
 
@@ -61,8 +61,16 @@ cd aicontroller
 
 ### 2) Configure environment
 
+macOS/Linux:
+
 ```bash
 cp .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
 Minimum production variables to change before go-live:
@@ -94,12 +102,24 @@ Useful ingestion guardrails:
 Without a model artifact, worker inference falls back to heuristic scoring.
 Full model build runbook: `docs/model-generation.md`.
 
+macOS/Linux:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 python src/pipeline.py --phase phase2-5
+```
+
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python .\src\pipeline.py --phase phase2-5
 ```
 
 Expected artifact path:
@@ -137,9 +157,18 @@ docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_d
 
 ### 6) Smoke-test the deployment
 
+macOS/Linux:
+
 ```bash
 docker compose ps
 curl -s http://localhost:8080/api/health
+```
+
+Windows PowerShell:
+
+```powershell
+docker compose ps
+Invoke-RestMethod -Uri http://localhost:8080/api/health
 ```
 
 Expected health response:
@@ -160,12 +189,29 @@ Open **http://localhost:8080** and sign in with the default credentials:
 > ```bash
 > python3 -c "import bcrypt; print(bcrypt.hashpw(b'your-strong-password', bcrypt.gensalt()).decode())"
 > ```
+>
+> ⚠️ **Docker Compose note for bcrypt hashes:** bcrypt strings contain `$` characters. If Compose shows interpolation warnings (for example about unset variables like `2b` or `12`) or login starts failing unexpectedly, escape each `$` as `$$` in `.env` (example: `$2b$12$...` -> `$$2b$$12$$...`).
 
-### 8) Optional: load synthetic telemetry
-Use the UI `Data Ingestion` tab for real sources, or run:
+### 8) Optional: load synthetic telemetry (recommended on first run)
+On a fresh database, the dashboard can be empty after login. This is expected until telemetry is ingested and worker jobs process it.
+Before running this step, ensure `docker compose up -d --build` is already running.
+
+Use the UI `Data Ingestion` tab for real sources, or run the fleet generator:
+
+macOS/Linux:
 
 ```bash
+export E2E_ADMIN_USERNAME=admin
+export E2E_ADMIN_PASSWORD=admin
 python3 generate_large_fleet.py
+```
+
+Windows PowerShell:
+
+```powershell
+$env:E2E_ADMIN_USERNAME = "admin"
+$env:E2E_ADMIN_PASSWORD = "admin"
+python .\generate_large_fleet.py
 ```
 
 This uploads synthetic telemetry for approximately 1,000 miners.
@@ -180,6 +226,8 @@ docker compose up -d --build
 ### 10) Common startup issues
 - `api` or `worker` exits immediately: run `docker compose logs api worker --tail=200`.
 - Health endpoint not ready: verify DB is healthy with `docker compose ps` and wait for `db` status `healthy`.
+- Login fails with `admin` / `admin`: verify `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in `.env`, then rebuild with `docker compose up -d --build`.
+- Dashboard is empty after successful login: this is expected on fresh installs; load telemetry via Section 8 and wait for KPI/inference jobs.
 - No ML inference alerts: confirm model exists at `outputs/models/phase4_best_model.joblib`.
 - External source rejected: confirm host is in `API_SOURCE_ALLOWLIST` and not private/link-local/metadata space.
 

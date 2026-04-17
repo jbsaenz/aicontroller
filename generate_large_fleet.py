@@ -2,12 +2,11 @@ import requests
 import pandas as pd
 import random
 import subprocess
-import time
 import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 API_BASE = "http://localhost:8080"
-CSV_PATH = "/tmp/large_fleet.csv"
 
 def print_step(msg):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] \033[1;36m{msg}\033[0m")
@@ -65,33 +64,51 @@ def main():
     add_miner("CRIT", 20, (100, 115), (20, 45), (13.8, 14.5), (3600, 3900))
 
     df = pd.DataFrame(data)
-    df.to_csv(CSV_PATH, index=False)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".csv",
+        prefix="aicontroller_large_fleet_",
+        delete=False,
+    ) as tmp_file:
+        csv_path = tmp_file.name
+    df.to_csv(csv_path, index=False)
     print(f"✅ Generated {len(df)} rows of data for {df['miner_id'].nunique()} miners.")
 
-    print_step("3. Uploading payload (this might take a few seconds)")
-    with open(CSV_PATH, "rb") as f:
-        res = session.post(f"{API_BASE}/api/ingest/csv", files={"file": f})
-    res.raise_for_status()
-    print(f"✅ Ingestion successful: {res.json()['rows_inserted']} rows inserted.")
+    try:
+        print_step("3. Uploading payload (this might take a few seconds)")
+        with open(csv_path, "rb") as f:
+            res = session.post(f"{API_BASE}/api/ingest/csv", files={"file": f})
+        res.raise_for_status()
+        print(f"✅ Ingestion successful: {res.json()['rows_inserted']} rows inserted.")
 
-    print_step("4. Executing Background Pipeline (KPI -> Inference -> Alerts)")
-    script = (
-        "import logging; logging.basicConfig(level=logging.INFO); "
-        "import os; "
-        "from sqlalchemy import create_engine; "
-        "from worker.ml_jobs import run_kpi_job, run_inference_job; "
-        "from worker.notifier import run_notify_job; "
-        "engine = create_engine(os.getenv('DATABASE_URL_SYNC')); "
-        "print('--- KPI Job ---'); run_kpi_job(engine); "
-        "print('--- Inference Job ---'); run_inference_job(engine); "
-        "print('--- Notify Job ---'); run_notify_job(engine);"
-    )
-    cmd = ["docker", "exec", "aicontroller-worker-1", "python", "-c", script]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
+        print_step("4. Executing Background Pipeline (KPI -> Inference -> Alerts)")
+        script = (
+            "import logging; logging.basicConfig(level=logging.INFO); "
+            "import os; "
+            "from sqlalchemy import create_engine; "
+            "from worker.ml_jobs import run_kpi_job, run_inference_job; "
+            "from worker.notifier import run_notify_job; "
+            "engine = create_engine(os.getenv('DATABASE_URL_SYNC')); "
+            "print('--- KPI Job ---'); run_kpi_job(engine); "
+            "print('--- Inference Job ---'); run_inference_job(engine); "
+            "print('--- Notify Job ---'); run_notify_job(engine);"
+        )
+        cmd = ["docker", "compose", "exec", "-T", "worker", "python", "-c", script]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+
     print("✅ Worker execution finished.")
+    if result.stdout:
+        print(result.stdout)
     if result.stderr:
         print(f"Log Output:\n{result.stderr}")
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Worker execution failed. "
+            f"exit_code={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
     
     print_step("5. Checking DB for fleet status generation")
     res = session.get(f"{API_BASE}/api/fleet/summary")

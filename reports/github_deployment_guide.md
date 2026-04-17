@@ -9,11 +9,20 @@ cd /Users/saenz/Applications/aicontroller
 
 Recommended checks before publishing:
 
+macOS/Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python src/pipeline.py --phase phase2-5
+```
+
+Windows PowerShell:
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python .\src\pipeline.py --phase phase2-5
 ```
 
 ## 2) What is already prepared
@@ -40,7 +49,32 @@ git push -u origin main
 - safety/security caveats (human review, telemetry integrity, conservative alerting)
 
 ## 5) Cross-platform usage note
-Users on macOS/Windows/Linux can run the exact same pipeline through Docker:
+Users on macOS/Windows/Linux should use Docker Compose for the full stack (`db`, `api`, `worker`) and dashboard:
+
+```bash
+docker compose up -d --build
+```
+
+First-run dashboard note:
+- Login is `admin` / `admin` by default.
+- If `ADMIN_PASSWORD_HASH` is bcrypt and Compose warns about interpolation, escape `$` as `$$` in `.env`.
+- An empty dashboard after login is expected until telemetry is ingested. Seed data with:
+
+macOS/Linux:
+```bash
+export E2E_ADMIN_USERNAME=admin
+export E2E_ADMIN_PASSWORD=admin
+python3 generate_large_fleet.py
+```
+
+Windows PowerShell:
+```powershell
+$env:E2E_ADMIN_USERNAME = "admin"
+$env:E2E_ADMIN_PASSWORD = "admin"
+python .\generate_large_fleet.py
+```
+
+For pipeline-only container execution:
 
 ```bash
 docker build -t aicontroller:latest .
