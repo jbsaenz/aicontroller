@@ -190,13 +190,17 @@ Open **http://localhost:8080** and sign in with the default credentials:
 > python3 -c "import bcrypt; print(bcrypt.hashpw(b'your-strong-password', bcrypt.gensalt()).decode())"
 > ```
 >
-> ⚠️ **Docker Compose note for bcrypt hashes:** bcrypt strings contain `$` characters. If Compose shows interpolation warnings (for example about unset variables like `2b` or `12`) or login starts failing unexpectedly, escape each `$` as `$$` in `.env` (example: `$2b$12$...` -> `$$2b$$12$$...`).
+> ⚠️ **Docker Compose note for bcrypt hashes:** bcrypt strings contain `$` characters. The default value in `.env.example` is already escaped for Compose. If you generate a custom hash, escape each `$` as `$$` in `.env` (example: `$2b$12$...` -> `$$2b$$12$$...`).
 
 ### 8) Optional: load synthetic telemetry (recommended on first run)
 On a fresh database, the dashboard can be empty after login. This is expected until telemetry is ingested and worker jobs process it.
 Before running this step, ensure `docker compose up -d --build` is already running.
 
-Use the UI `Data Ingestion` tab for real sources, or run the fleet generator:
+Fastest option for first-time users:
+- In the Fleet page empty state, click **Load Sample Data**. This calls `POST /api/ingest/seed-demo` and immediately seeds telemetry + KPI + risk rows.
+
+Technical/CLI option:
+- Run the fleet generator from shell:
 
 macOS/Linux:
 
@@ -227,7 +231,7 @@ docker compose up -d --build
 - `api` or `worker` exits immediately: run `docker compose logs api worker --tail=200`.
 - Health endpoint not ready: verify DB is healthy with `docker compose ps` and wait for `db` status `healthy`.
 - Login fails with `admin` / `admin`: verify `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in `.env`, then rebuild with `docker compose up -d --build`.
-- Dashboard is empty after successful login: this is expected on fresh installs; load telemetry via Section 8 and wait for KPI/inference jobs.
+- Dashboard is empty after successful login: this is expected on fresh installs; use Fleet page **Load Sample Data** (recommended) or seed via Section 8 CLI commands.
 - No ML inference alerts: confirm model exists at `outputs/models/phase4_best_model.joblib`.
 - External source rejected: confirm host is in `API_SOURCE_ALLOWLIST` and not private/link-local/metadata space.
 
@@ -237,6 +241,7 @@ docker compose up -d --build
 
 ### API Services (`/api`)
 - **FastAPI Core**: Complete routing matrix for `ingest`, `fleet`, `miners`, `analytics`, `alerts`, and `settings`. Includes JWT middleware.
+- **First-run onboarding endpoint**: `POST /api/ingest/seed-demo` seeds telemetry + KPI + risk rows for immediate dashboard visibility on fresh installs.
 - **Analytics Module**: Advanced correlation and tradeoff matrixes with dynamic historical filtering supporting precise `start_time` and `end_time` capabilities.
 - **Async DB Layer**: `SQLAlchemy` async session pooling mapping to `TimescaleDB` hypertables to maintain massive high-frequency series entries effectively.
 

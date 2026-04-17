@@ -8,6 +8,7 @@ let refreshTimer = null;
 let activeCharts = {};
 let SOURCE_URL_VALIDATION = null;
 let SOURCE_ALLOWLIST_INFO = null;
+let fleetSeedInProgress = false;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const HTML_ESCAPE_MAP = {
@@ -190,7 +191,27 @@ function renderFleetGrid(fleet) {
   });
 
   if (!filtered.length) {
-    grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📡</div><div>No miners match the current filter</div></div>';
+    const showSeedState = !fleet.length && !search && (filter === 'all' || !filter);
+    if (showSeedState) {
+      grid.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">📡</div>
+          <div class="empty-title">No telemetry data yet</div>
+          <div class="empty-copy">Load sample data now or upload your own CSV from the Data Ingestion tab.</div>
+          <div class="empty-state-actions">
+            <button id="seed-demo-btn" class="btn btn-primary btn-sm" style="width:auto;margin-top:0">Load Sample Data</button>
+            <button id="open-ingest-btn" class="btn btn-ghost btn-sm">Open Data Ingestion</button>
+          </div>
+          <div id="seed-demo-status" class="empty-state-note"></div>
+        </div>
+      `;
+      document.getElementById('seed-demo-btn')?.addEventListener('click', (event) => {
+        seedDemoFleet(event.currentTarget);
+      });
+      document.getElementById('open-ingest-btn')?.addEventListener('click', () => navigate('ingest'));
+    } else {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📡</div><div>No miners match the current filter</div></div>';
+    }
     return;
   }
 
@@ -232,6 +253,43 @@ function renderFleetGrid(fleet) {
       }
     });
   });
+}
+
+async function seedDemoFleet(buttonEl) {
+  if (fleetSeedInProgress) return;
+  fleetSeedInProgress = true;
+  const btn = buttonEl || document.getElementById('seed-demo-btn');
+  const statusEl = document.getElementById('seed-demo-status');
+  const previousLabel = btn?.textContent || 'Load Sample Data';
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+  }
+  if (statusEl) {
+    statusEl.className = 'empty-state-note';
+    statusEl.textContent = 'Generating sample fleet data...';
+  }
+
+  try {
+    const result = await api('/api/ingest/seed-demo', { method: 'POST' });
+    if (statusEl && result) {
+      statusEl.className = 'empty-state-note is-ok';
+      statusEl.textContent = `Loaded ${asNumber(result.rows_inserted, 0)} telemetry rows across ${asNumber(result?.miners_found?.length, 0)} miners. Refreshing dashboard...`;
+    }
+    await loadFleet();
+  } catch (error) {
+    if (statusEl) {
+      statusEl.className = 'empty-state-note is-error';
+      statusEl.textContent = `Sample load failed: ${error.message}`;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = previousLabel;
+    }
+    fleetSeedInProgress = false;
+  }
 }
 
 document.getElementById('fleet-search').addEventListener('input', () => renderFleetGrid(FLEET_DATA));

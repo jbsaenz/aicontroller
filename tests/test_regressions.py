@@ -500,6 +500,12 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("CSV payload too large", ingest_py)
         self.assertIn("CSV has too many rows", ingest_py)
 
+    def test_ingest_router_exposes_demo_seed_endpoint(self):
+        ingest_py = (ROOT / "api/routers/ingest.py").read_text(encoding="utf-8")
+        self.assertIn('"/ingest/seed-demo"', ingest_py)
+        self.assertIn("KPI_JSON_INSERT_SQL", ingest_py)
+        self.assertIn("RISK_JSON_UPSERT_SQL", ingest_py)
+
     def test_ingest_insert_sql_is_static_not_fstring(self):
         ingest_py = (ROOT / "api/routers/ingest.py").read_text(encoding="utf-8")
         self.assertIn("INGEST_JSON_INSERT_SQL = text(", ingest_py)
@@ -1194,6 +1200,12 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("${esc(a.trigger_reason || '—')}", app_js)
         self.assertIn("${esc(s.url_template)}", app_js)
         self.assertIn("safeClassToken(", app_js)
+
+    def test_dashboard_empty_state_offers_one_click_seed_action(self):
+        app_js = (ROOT / "dashboard/app.js").read_text(encoding="utf-8")
+        self.assertIn("Load Sample Data", app_js)
+        self.assertIn("seedDemoFleet", app_js)
+        self.assertIn("api('/api/ingest/seed-demo'", app_js)
 
     def test_settings_router_enforces_allowlist_and_validation(self):
         settings_py = (ROOT / "api/routers/settings.py").read_text(encoding="utf-8")

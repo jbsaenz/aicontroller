@@ -91,8 +91,9 @@ Invoke-RestMethod -Uri http://localhost:8080/api/health
 ```bash
 docker compose up -d --build
 ```
-- Bcrypt hashes contain `$` characters. If Docker Compose reports interpolation warnings (for example about unset vars like `2b` or `12`), escape each `$` as `$$` in `.env` (`$2b$12$...` becomes `$$2b$$12$$...`).
+- Bcrypt hashes contain `$` characters. The default hash in `.env.example` is already escaped for Compose. If you set a custom hash and Docker Compose reports interpolation warnings (for example about unset vars like `2b` or `12`), escape each `$` as `$$` in `.env` (`$2b$12$...` becomes `$$2b$$12$$...`).
 - If login succeeds but the dashboard is empty, this is expected on a fresh database until telemetry is ingested.
+- One-click option in UI: Fleet page empty state button **Load Sample Data** calls `POST /api/ingest/seed-demo` and seeds telemetry + KPI + risk rows immediately.
 - Seed synthetic telemetry and force KPI/inference/alert processing:
 
 macOS/Linux:

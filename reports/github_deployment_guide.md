@@ -57,7 +57,8 @@ docker compose up -d --build
 
 First-run dashboard note:
 - Login is `admin` / `admin` by default.
-- If `ADMIN_PASSWORD_HASH` is bcrypt and Compose warns about interpolation, escape `$` as `$$` in `.env`.
+- The default `ADMIN_PASSWORD_HASH` in `.env.example` is already Compose-safe. If you replace it with a custom bcrypt hash, escape `$` as `$$` in `.env`.
+- If Fleet is empty after login, click **Load Sample Data** in the Fleet page (calls `POST /api/ingest/seed-demo`).
 - An empty dashboard after login is expected until telemetry is ingested. Seed data with:
 
 macOS/Linux:
