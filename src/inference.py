@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
-from config import PHASE4_ALERTS_PATH, PHASE4_RISK_PREDICTIONS_PATH
+from src.config import PHASE4_ALERTS_PATH, PHASE4_RISK_PREDICTIONS_PATH
 
 
 def _risk_band(score: float) -> str:
@@ -25,7 +24,7 @@ def build_risk_outputs(
     validation_df: pd.DataFrame,
     y_score: np.ndarray,
     threshold: float,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build per-row risk predictions and condensed alert examples."""
 
     output = validation_df.copy()
@@ -79,10 +78,10 @@ def save_risk_outputs(
     alerts_df: pd.DataFrame,
     risk_path: str | Path = PHASE4_RISK_PREDICTIONS_PATH,
     alerts_path: str | Path = PHASE4_ALERTS_PATH,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Persist full risk predictions and compact alert examples."""
 
-    written: Dict[str, str] = {}
+    written: dict[str, str] = {}
 
     risk_out = Path(risk_path)
     risk_out.parent.mkdir(parents=True, exist_ok=True)

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 import pandas as pd
 
-from config import (
+from src.config import (
     DATA_RAW_DIR,
     DataGenerationConfig,
     OPERATING_MODES,
@@ -17,7 +16,7 @@ from config import (
 )
 
 
-MODE_PARAMS: Dict[str, Dict[str, float]] = {
+MODE_PARAMS: dict[str, dict[str, float]] = {
     "eco": {
         "clock_base": 480.0,
         "voltage_base": 11.9,
@@ -67,14 +66,14 @@ def _ambient_temperature_profile(
 
 def _simulate_miner_mode_series(
     n_steps: int, rng: np.random.Generator
-) -> List[str]:
+) -> list[str]:
     transition = {
         "eco": {"eco": 0.94, "normal": 0.05, "turbo": 0.01},
         "normal": {"eco": 0.03, "normal": 0.93, "turbo": 0.04},
         "turbo": {"eco": 0.02, "normal": 0.08, "turbo": 0.90},
     }
     initial = rng.choice(OPERATING_MODES, p=[0.30, 0.55, 0.15])
-    modes: List[str] = [str(initial)]
+    modes: list[str] = [str(initial)]
     for _ in range(n_steps - 1):
         prev = modes[-1]
         probs = [transition[prev][m] for m in OPERATING_MODES]
@@ -236,7 +235,7 @@ def _apply_future_failure_label(
     df: pd.DataFrame, horizon_hours: int, freq_minutes: int
 ) -> pd.Series:
     horizon_steps = max(1, int((horizon_hours * 60) / freq_minutes))
-    labels: List[pd.Series] = []
+    labels: list[pd.Series] = []
 
     for _, g in df.groupby("miner_id", sort=False):
         future_events = g["failure_event"].shift(-1, fill_value=0).to_numpy(dtype=float)
@@ -324,7 +323,7 @@ def save_raw_telemetry(df: pd.DataFrame, path: str | None = None) -> str:
     return str(output_path)
 
 
-def summarize_generated_data(df: pd.DataFrame, cfg: DataGenerationConfig) -> Dict[str, object]:
+def summarize_generated_data(df: pd.DataFrame, cfg: DataGenerationConfig) -> dict[str, object]:
     """Return compact summary stats for logs and debugging."""
 
     return {

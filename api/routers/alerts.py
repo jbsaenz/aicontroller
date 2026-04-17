@@ -1,8 +1,6 @@
 """Alerts CRUD endpoints."""
 
-from typing import List
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +11,7 @@ from api.schemas import AlertOut
 router = APIRouter()
 
 
-@router.get("/alerts", response_model=List[AlertOut])
+@router.get("/alerts", response_model=list[AlertOut])
 async def get_alerts(
     resolved: bool = Query(False),
     limit: int = Query(100, le=500),
@@ -38,27 +36,10 @@ async def get_alerts(
     return [dict(r) for r in result.mappings().all()]
 
 
-@router.post("/alerts/{alert_id}/resolve")
-async def resolve_alert(
-    alert_id: int,
-    db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_token),
-):
-    await db.execute(
-        text("""
-            UPDATE alerts
-            SET resolved = TRUE, resolved_at = NOW()
-            WHERE id = :aid
-        """),
-        {"aid": alert_id},
-    )
-    await db.commit()
-    return {"status": "resolved", "id": alert_id}
-
-
-@router.get("/alerts/history", response_model=List[AlertOut])
+@router.get("/alerts/history", response_model=list[AlertOut])
 async def get_alert_history(
-    limit: int = Query(200, le=1000),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
@@ -70,8 +51,30 @@ async def get_alert_history(
                    email_sent, telegram_sent
             FROM alerts
             ORDER BY created_at DESC
-            LIMIT :lim
+            LIMIT :lim OFFSET :off
         """),
-        {"lim": limit},
+        {"lim": limit, "off": offset},
     )
     return [dict(r) for r in result.mappings().all()]
+
+
+@router.post("/alerts/{alert_id}/resolve")
+async def resolve_alert(
+    alert_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_token),
+):
+    result = await db.execute(
+        text("""
+            UPDATE alerts
+            SET resolved = TRUE, resolved_at = NOW()
+            WHERE id = :aid
+            RETURNING id
+        """),
+        {"aid": alert_id},
+    )
+    if result.first() is None:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail="Alert not found")
+    await db.commit()
+    return {"status": "resolved", "id": alert_id}

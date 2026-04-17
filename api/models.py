@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models matching the TimescaleDB schema."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, Double, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -64,7 +64,9 @@ class RiskPrediction(Base):
     __tablename__ = "risk_predictions"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    predicted_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    predicted_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
     miner_id = Column(Text, nullable=False)
     risk_score = Column(Double, nullable=False)
     risk_band = Column(Text, nullable=False)
@@ -76,7 +78,9 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
     miner_id = Column(Text, nullable=False)
     severity = Column(Text, default="warning")
     risk_score = Column(Double)
@@ -96,12 +100,16 @@ class ApiSource(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(Text, nullable=False)
     url_template = Column(Text, nullable=False)
-    auth_headers = Column(JSONB, default={})
-    field_mapping = Column(JSONB, default={})
+    auth_headers = Column(JSONB, default=dict)
+    field_mapping = Column(JSONB, default=dict)
     polling_interval_minutes = Column(Integer, default=10)
     enabled = Column(Boolean, default=True)
     last_fetched_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    fetch_failure_streak = Column(Integer, default=0, nullable=False)
+    last_fetch_attempt_at = Column(DateTime(timezone=True))
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class AppSetting(Base):
@@ -109,4 +117,6 @@ class AppSetting(Base):
 
     key = Column(Text, primary_key=True)
     value = Column(Text, default="")
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )

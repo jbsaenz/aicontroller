@@ -21,9 +21,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Compile checks
+      - name: Compile checks (src)
         run: |
           python -m py_compile src/config.py src/data_generation.py src/ingestion.py src/preprocessing.py src/kpi.py src/eda.py src/visualization.py src/feature_engineering.py src/evaluation.py src/inference.py src/train.py src/phase5.py src/pipeline.py
+
+      - name: Compile checks (API)
+        run: |
+          python -m py_compile api/main.py api/auth.py api/db.py api/models.py api/schemas.py api/rate_limit.py
+          python -m py_compile api/routers/alerts.py api/routers/analytics.py api/routers/fleet.py api/routers/ingest.py api/routers/miners.py api/routers/settings.py
+
+      - name: Compile checks (Worker)
+        run: |
+          python -m py_compile worker/main.py worker/fetcher.py worker/ml_jobs.py worker/automator.py worker/notifier.py
+
+      - name: Compile checks (shared src)
+        run: |
+          python -m py_compile src/url_safety.py src/secret_store.py src/policy.py src/runtime_utils.py src/logging_utils.py
+
+      - name: Run regression tests
+        run: python -m pytest tests/ -v --tb=short
 
       - name: Run phase2 smoke test
         run: |

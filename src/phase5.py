@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict
 
 import numpy as np
 import pandas as pd
 
-from config import (
+from src.config import (
     PHASE4_BEST_MODEL_SUMMARY_PATH,
     PHASE4_RISK_PREDICTIONS_PATH,
     PHASE5_EVALUATION_SUMMARY_PATH,
@@ -19,19 +18,21 @@ from config import (
     PHASE5_PRIORITY_ALERTS_PATH,
     PHASE5_THRESHOLD_TABLE_PATH,
 )
-from evaluation import (
+from src.evaluation import (
     build_threshold_analysis_table,
     evaluate_at_threshold,
     get_classification_report_dict,
     get_confusion_matrix_array,
 )
-from visualization import (
+from src.visualization import (
+    plot_feature_importance,
+    plot_mode_performance_breakdown,
     plot_phase5_confusion_matrix,
     plot_phase5_pr_curve,
     plot_phase5_risk_distribution,
     plot_phase5_roc_curve,
 )
-from policy import backtest_policy_uplift, parse_policy_config
+from src.policy import backtest_policy_uplift, parse_policy_config
 
 
 def _load_recommended_threshold(default: float = 0.5) -> float:
@@ -144,7 +145,7 @@ def _build_priority_alerts(risk_df: pd.DataFrame, threshold: float) -> pd.DataFr
     return priority.head(400)
 
 
-def run_phase5_evaluation() -> Dict[str, object]:
+def run_phase5_evaluation() -> dict[str, object]:
     """Run Phase 5 evaluation/reporting using Phase 4 validation predictions."""
 
     if not PHASE4_RISK_PREDICTIONS_PATH.exists():
@@ -203,7 +204,12 @@ def run_phase5_evaluation() -> Dict[str, object]:
         "precision_recall_curve": plot_phase5_pr_curve(y_true.to_numpy(), y_score.to_numpy()),
         "roc_curve": plot_phase5_roc_curve(y_true.to_numpy(), y_score.to_numpy()),
         "risk_distribution": plot_phase5_risk_distribution(risk_df),
+        "mode_performance": plot_mode_performance_breakdown(risk_df, recommended_threshold),
     }
+    try:
+        figure_paths["feature_importance"] = plot_feature_importance()
+    except Exception:
+        pass  # Feature importance CSV may not exist if phase4 was skipped
 
     summary = {
         "validation_rows": int(len(risk_df)),

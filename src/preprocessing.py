@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
-from config import (
+from src.config import (
     OPERATING_MODES,
     PLAUSIBLE_RANGES,
     PREPROCESSING_REPORT_PATH,
@@ -18,7 +17,7 @@ from config import (
 )
 
 
-def _normalize_operating_mode(mode_series: pd.Series) -> Tuple[pd.Series, int]:
+def _normalize_operating_mode(mode_series: pd.Series) -> tuple[pd.Series, int]:
     normalized = mode_series.astype(str).str.strip().str.lower()
     invalid_mask = ~normalized.isin(OPERATING_MODES)
     invalid_count = int(invalid_mask.sum())
@@ -46,8 +45,8 @@ def _impute_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _clip_to_ranges(df: pd.DataFrame) -> Dict[str, int]:
-    clipped_counts: Dict[str, int] = {}
+def _clip_to_ranges(df: pd.DataFrame) -> dict[str, int]:
+    clipped_counts: dict[str, int] = {}
     for col, (lower, upper) in PLAUSIBLE_RANGES.items():
         if col not in df.columns:
             continue
@@ -78,7 +77,7 @@ def _recompute_efficiency_and_deviation(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def preprocess_telemetry(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, object]]:
+def preprocess_telemetry(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
     """Clean raw telemetry and return cleaned frame plus processing report."""
 
     working = df.copy()
@@ -116,7 +115,7 @@ def preprocess_telemetry(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, obje
     )
 
     final_missing = {c: int(working[c].isna().sum()) for c in working.columns}
-    report: Dict[str, object] = {
+    report: dict[str, object] = {
         "input_rows": initial_rows,
         "output_rows": int(len(working)),
         "rows_dropped_invalid_core_fields": int(dropped_invalid_core_rows),
@@ -138,10 +137,10 @@ def save_processed_telemetry(
     cleaned_df: pd.DataFrame,
     parquet_path: str | Path = PROCESSED_TELEMETRY_PARQUET_PATH,
     csv_path: str | Path = PROCESSED_TELEMETRY_CSV_PATH,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Persist cleaned telemetry. Writes parquet when possible and CSV always."""
 
-    written_paths: Dict[str, str] = {}
+    written_paths: dict[str, str] = {}
     parquet_out = Path(parquet_path)
     csv_out = Path(csv_path)
     parquet_out.parent.mkdir(parents=True, exist_ok=True)
@@ -161,7 +160,7 @@ def save_processed_telemetry(
 def run_preprocessing(
     raw_df: pd.DataFrame,
     report_path: str | Path = PREPROCESSING_REPORT_PATH,
-) -> Tuple[pd.DataFrame, Dict[str, object]]:
+) -> tuple[pd.DataFrame, dict[str, object]]:
     """Run preprocessing and write a JSON summary report."""
 
     cleaned_df, report = preprocess_telemetry(raw_df)

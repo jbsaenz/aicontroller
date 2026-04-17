@@ -3,6 +3,7 @@ import pandas as pd
 import random
 import subprocess
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 API_BASE = "http://localhost:8080"
@@ -11,12 +12,27 @@ CSV_PATH = "/tmp/test_advanced_telemetry.csv"
 def print_step(msg):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] \033[1;36m{msg}\033[0m")
 
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Missing required environment variable: {name}. "
+            "Set E2E credentials before running this script."
+        )
+    return value
+
+
 def main():
     print_step("1. Authenticating to API")
-    res = requests.post(f"{API_BASE}/api/auth/login", json={"username": "admin", "password": "password12345"})
+    admin_username = _required_env("E2E_ADMIN_USERNAME")
+    admin_password = _required_env("E2E_ADMIN_PASSWORD")
+    session = requests.Session()
+    res = session.post(
+        f"{API_BASE}/api/auth/login",
+        json={"username": admin_username, "password": admin_password},
+    )
     res.raise_for_status()
-    token = res.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
     
     print_step("2. Generating advanced chip-level telemetry")
     now = datetime.now(timezone.utc)
@@ -56,7 +72,7 @@ def main():
 
     print_step("3. Uploading payload")
     with open(CSV_PATH, "rb") as f:
-        res = requests.post(f"{API_BASE}/api/ingest/csv", files={"file": f}, headers=headers)
+        res = session.post(f"{API_BASE}/api/ingest/csv", files={"file": f})
     
     if not res.ok:
         print(f"FAILED: {res.text}")
@@ -87,15 +103,14 @@ def main():
         )
         
     print_step("5. Verifying Decision Policy Generated Alert")
-    res = requests.get(f"{API_BASE}/api/alerts/history", params={"limit": 1000}, headers=headers)
+    res = session.get(f"{API_BASE}/api/alerts/history", params={"limit": 1000})
     res.raise_for_status()
     alerts = res.json()
     miner_alerts = [a for a in alerts if a["miner_id"] == miner_id]
     if not miner_alerts:
-        risk_res = requests.get(
+        risk_res = session.get(
             f"{API_BASE}/api/miners/{miner_id}/risk",
             params={"hours": 2},
-            headers=headers,
         )
         risk_res.raise_for_status()
         risk_rows = risk_res.json()

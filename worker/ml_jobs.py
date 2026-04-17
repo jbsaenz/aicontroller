@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-import sys
+import threading
 from pathlib import Path
 
 import joblib
@@ -17,17 +17,20 @@ from src.policy import (
     optimize_policy_decision,
     parse_policy_config,
 )
+from src.runtime_utils import is_truthy, normalize_control_mode
 
 logger = logging.getLogger("worker.ml_jobs")
 
 MODEL_PATH = Path(
     os.getenv("MODEL_PATH", "/app/outputs/models/phase4_best_model.joblib")
 )
+MODEL_VERSION = os.getenv("MODEL_VERSION", "v1").strip() or "v1"
 RISK_THRESHOLD = float(os.getenv("RISK_THRESHOLD", "0.55"))
 ALERT_COOLDOWN_HOURS = int(os.getenv("ALERT_COOLDOWN_HOURS", "1"))
 INFERENCE_LOOKBACK_HOURS = int(os.getenv("INFERENCE_LOOKBACK_HOURS", "24"))
 COOLING_POWER_RATIO = float(os.getenv("COOLING_POWER_RATIO", "0.24"))
-CONTROL_MODE = os.getenv("CONTROL_MODE", "advisory").strip().lower()
+RETRAIN_DAYS = max(int(os.getenv("RETRAIN_DAYS", "30")), 1)
+CONTROL_MODE = normalize_control_mode(os.getenv("CONTROL_MODE", "advisory"))
 POLICY_BACKTEST_REPORT_PATH = Path(
     os.getenv("POLICY_BACKTEST_REPORT_PATH", "/app/outputs/metrics/policy_backtest_latest.json")
 )
@@ -50,15 +53,14 @@ POLICY_SETTINGS_KEYS = (
     "control_mode",
     "inference_lookback_hours",
     "cooling_power_ratio",
+    "retrain_days",
 )
 RUNTIME_SETTINGS_KEYS = (
     "risk_threshold",
     "alert_cooldown_hours",
     *POLICY_SETTINGS_KEYS,
 )
-RUNTIME_SETTINGS_SQL_IN = ", ".join(
-    f"'{key}'" for key in sorted(set(RUNTIME_SETTINGS_KEYS))
-)
+RUNTIME_SETTINGS_KEY_LIST = sorted(set(RUNTIME_SETTINGS_KEYS))
 
 # ── KPI constants (from scope plan) ───────────────────────────────────────
 V_REF, T_REF = 12.5, 25.0
@@ -67,6 +69,37 @@ MODE_FACTORS = {"eco": 0.97, "normal": 1.00, "turbo": 1.08}
 RISK_BANDS = [(0.75, "critical"), (0.50, "high"), (0.30, "medium"), (0.0, "low")]
 KPI_TEXT_COLUMNS = {"miner_id", "operating_mode", "event_codes"}
 KPI_INT_COLUMNS = {"failure_within_horizon", "bad_hash_count", "double_hash_count", "read_errors"}
+POWER_INSTABILITY_WINDOW = max(int(os.getenv("POWER_INSTABILITY_WINDOW", "6")), 2)
+KPI_JOB_BATCH_SIZE = max(int(os.getenv("KPI_JOB_BATCH_SIZE", "5000")), 100)
+KPI_JOB_MAX_ROWS_PER_RUN = max(
+    int(os.getenv("KPI_JOB_MAX_ROWS_PER_RUN", "50000")),
+    KPI_JOB_BATCH_SIZE,
+)
+RETRAIN_MIN_ROWS = max(int(os.getenv("RETRAIN_MIN_ROWS", "500")), 1)
+RETRAIN_MIN_MINERS = max(int(os.getenv("RETRAIN_MIN_MINERS", "10")), 1)
+RETRAIN_MIN_TIMESPAN_HOURS = max(
+    float(os.getenv("RETRAIN_MIN_TIMESPAN_HOURS", "72")),
+    1.0,
+)
+_RISK_PREDICTIONS_UPSERT_READY = False
+_RISK_PREDICTIONS_UPSERT_LOCK = threading.Lock()
+
+# Pre-built at module level — never changes between runs.
+_KPI_INSERT_COLS = [
+    "timestamp", "miner_id", "asic_clock_mhz", "asic_voltage_v",
+    "asic_hashrate_ths", "asic_temperature_c", "asic_power_w",
+    "operating_mode", "ambient_temperature_c", "efficiency_j_per_th",
+    "power_instability_index", "hashrate_deviation_pct",
+    "true_efficiency_te", "failure_within_horizon",
+    "chip_temp_max", "chip_temp_std", "bad_hash_count",
+    "double_hash_count", "read_errors", "event_codes",
+    "expected_hashrate_ths",
+]
+_KPI_INSERT_SQL = text(
+    f"INSERT INTO kpi_telemetry ({', '.join(_KPI_INSERT_COLS)}) "
+    f"VALUES ({', '.join(':' + c for c in _KPI_INSERT_COLS)}) "
+    "ON CONFLICT (miner_id, timestamp) DO NOTHING"
+)
 
 
 def _risk_band(score: float) -> str:
@@ -74,10 +107,6 @@ def _risk_band(score: float) -> str:
         if score >= threshold:
             return band
     return "low"
-
-
-def _is_truthy(value) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _compute_te(df: pd.DataFrame) -> pd.Series:
@@ -98,10 +127,10 @@ def _load_runtime_config(engine: Engine) -> dict:
     cfg = {
         "risk_threshold": RISK_THRESHOLD,
         "alert_cooldown_hours": ALERT_COOLDOWN_HOURS,
-        "policy_optimizer_enabled": _is_truthy(
+        "policy_optimizer_enabled": is_truthy(
             os.getenv("POLICY_OPTIMIZER_ENABLED", "true")
         ),
-        "automation_require_policy_backtest": _is_truthy(
+        "automation_require_policy_backtest": is_truthy(
             os.getenv("AUTOMATION_REQUIRE_POLICY_BACKTEST", "true")
         ),
         "policy_min_uplift_usd_per_miner": float(
@@ -134,15 +163,17 @@ def _load_runtime_config(engine: Engine) -> dict:
         "control_mode": CONTROL_MODE,
         "inference_lookback_hours": INFERENCE_LOOKBACK_HOURS,
         "cooling_power_ratio": COOLING_POWER_RATIO,
+        "retrain_days": RETRAIN_DAYS,
     }
     try:
         with engine.connect() as conn:
             result = conn.execute(
-                text(f"""
+                text("""
                     SELECT key, value
                     FROM app_settings
-                    WHERE key IN ({RUNTIME_SETTINGS_SQL_IN})
-                """)
+                    WHERE key = ANY(CAST(:keys AS text[]))
+                """),
+                {"keys": RUNTIME_SETTINGS_KEY_LIST},
             )
             settings = {r[0]: r[1] for r in result}
 
@@ -166,6 +197,11 @@ def _load_runtime_config(engine: Engine) -> dict:
             if parsed >= 0:
                 cfg["cooling_power_ratio"] = parsed
 
+        if settings.get("retrain_days") not in (None, ""):
+            parsed = int(float(settings["retrain_days"]))
+            if parsed >= 1:
+                cfg["retrain_days"] = parsed
+
         if settings.get("control_mode") not in (None, ""):
             mode = str(settings["control_mode"]).strip().lower()
             if mode in {"advisory", "actuation"}:
@@ -179,14 +215,18 @@ def _load_runtime_config(engine: Engine) -> dict:
             "Could not load runtime settings from DB, using env defaults: %s", exc
         )
 
-    cfg["control_mode"] = str(cfg.get("control_mode", "advisory")).strip().lower()
-    if cfg["control_mode"] not in {"advisory", "actuation"}:
-        cfg["control_mode"] = "advisory"
+    cfg["control_mode"] = normalize_control_mode(
+        cfg.get("control_mode", CONTROL_MODE)
+    )
     cfg["inference_lookback_hours"] = max(
         int(float(cfg.get("inference_lookback_hours", INFERENCE_LOOKBACK_HOURS))), 1
     )
     cfg["cooling_power_ratio"] = max(
         float(cfg.get("cooling_power_ratio", COOLING_POWER_RATIO)), 0.0
+    )
+    cfg["retrain_days"] = max(
+        int(float(cfg.get("retrain_days", RETRAIN_DAYS))),
+        1,
     )
     cfg["policy"] = parse_policy_config(cfg)
     return cfg
@@ -245,49 +285,57 @@ def _build_kpi_insert_records(df: pd.DataFrame, insert_cols: list[str]) -> list[
     return records
 
 
-# ── KPI Job ────────────────────────────────────────────────────────────────
-def run_kpi_job(engine: Engine):
-    runtime_cfg = _load_runtime_config(engine)
-    cooling_power_ratio = float(runtime_cfg.get("cooling_power_ratio", COOLING_POWER_RATIO))
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT t.id, t.timestamp, t.miner_id, t.asic_clock_mhz,
-                   t.asic_voltage_v, t.asic_hashrate_ths, t.asic_temperature_c,
-                   t.asic_power_w, t.operating_mode, t.ambient_temperature_c,
-                   t.chip_temp_max, t.chip_temp_std, t.bad_hash_count,
-                   t.double_hash_count, t.read_errors, t.event_codes,
-                   t.expected_hashrate_ths
-            FROM telemetry t
-            WHERE NOT EXISTS (
-                SELECT 1 FROM kpi_telemetry k
-                WHERE k.miner_id = t.miner_id AND k.timestamp = t.timestamp
-            )
-            ORDER BY t.timestamp ASC
-            LIMIT 50000
-        """))
-        rows = result.mappings().all()
-
+def _prepare_kpi_batch_records(rows: list[dict], cooling_power_ratio: float) -> list[dict]:
     if not rows:
-        logger.info("KPI job: no new telemetry rows to process")
-        return
+        return []
 
     df = pd.DataFrame([dict(r) for r in rows])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df = df.dropna(subset=["timestamp"]).copy()
+    if df.empty:
+        return []
+
+    # Ensure rolling windows are computed on deterministic per-miner chronology.
+    df = df.sort_values(["miner_id", "timestamp"], kind="mergesort").reset_index(drop=True)
+
     df["cooling_power_w"] = (
         pd.to_numeric(df["asic_power_w"], errors="coerce").fillna(0.0)
         * cooling_power_ratio
     )
-    df["efficiency_j_per_th"] = (df["asic_power_w"] / df["asic_hashrate_ths"].replace(0, np.nan)).round(4)
+    df["efficiency_j_per_th"] = (
+        df["asic_power_w"] / df["asic_hashrate_ths"].replace(0, np.nan)
+    ).round(4)
 
-    # Power instability index (rolling std proxy — set 0 for now, enriched by future feature eng)
-    df["power_instability_index"] = 0.0
+    # Power instability index: rolling coefficient of variation per miner.
+    asic_power = pd.to_numeric(df["asic_power_w"], errors="coerce")
+    rolling_mean = asic_power.groupby(df["miner_id"]).transform(
+        lambda series: series.rolling(
+            window=POWER_INSTABILITY_WINDOW, min_periods=2
+        ).mean()
+    )
+    rolling_std = asic_power.groupby(df["miner_id"]).transform(
+        lambda series: series.rolling(
+            window=POWER_INSTABILITY_WINDOW, min_periods=2
+        ).std(ddof=0)
+    )
+    df["power_instability_index"] = (
+        (rolling_std / rolling_mean.replace(0, np.nan))
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .clip(0, 1)
+        .round(4)
+    )
 
-    # Hashrate deviation vs mode median
+    # Hashrate deviation vs mode median.
     mode_medians = df.groupby("operating_mode")["asic_hashrate_ths"].transform("median")
-    df["hashrate_deviation_pct"] = ((df["asic_hashrate_ths"] - mode_medians) / mode_medians.replace(0, np.nan) * 100).round(2)
+    df["hashrate_deviation_pct"] = (
+        (df["asic_hashrate_ths"] - mode_medians)
+        / mode_medians.replace(0, np.nan)
+        * 100
+    ).round(2)
 
     df["true_efficiency_te"] = _compute_te(df)
-    df["failure_within_horizon"] = 0  # Updated during retraining
+    df["failure_within_horizon"] = 0  # Updated during retraining.
 
     insert_cols = [
         "timestamp", "miner_id", "asic_clock_mhz", "asic_voltage_v",
@@ -297,19 +345,66 @@ def run_kpi_job(engine: Engine):
         "true_efficiency_te", "failure_within_horizon",
         "chip_temp_max", "chip_temp_std", "bad_hash_count",
         "double_hash_count", "read_errors", "event_codes",
-        "expected_hashrate_ths"
+        "expected_hashrate_ths",
     ]
-    records = _build_kpi_insert_records(df, insert_cols)
+    return _build_kpi_insert_records(df, insert_cols)
 
-    insert_sql = f"""
-        INSERT INTO kpi_telemetry ({', '.join(insert_cols)})
-        VALUES ({', '.join(':' + c for c in insert_cols)})
-        ON CONFLICT DO NOTHING
-    """
-    with engine.begin() as conn:
-        conn.execute(text(insert_sql), records)
 
-    logger.info("KPI job: inserted %d rows", len(records))
+# ── KPI Job ────────────────────────────────────────────────────────────────
+def run_kpi_job(engine: Engine):
+    runtime_cfg = _load_runtime_config(engine)
+    cooling_power_ratio = float(runtime_cfg.get("cooling_power_ratio", COOLING_POWER_RATIO))
+
+    last_seen_id = 0
+    rows_scanned = 0
+    rows_inserted = 0
+
+    while rows_scanned < KPI_JOB_MAX_ROWS_PER_RUN:
+        batch_limit = min(KPI_JOB_BATCH_SIZE, KPI_JOB_MAX_ROWS_PER_RUN - rows_scanned)
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT t.id, t.timestamp, t.miner_id, t.asic_clock_mhz,
+                           t.asic_voltage_v, t.asic_hashrate_ths, t.asic_temperature_c,
+                           t.asic_power_w, t.operating_mode, t.ambient_temperature_c,
+                           t.chip_temp_max, t.chip_temp_std, t.bad_hash_count,
+                           t.double_hash_count, t.read_errors, t.event_codes,
+                           t.expected_hashrate_ths
+                    FROM telemetry t
+                    WHERE t.id > :last_seen_id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM kpi_telemetry k
+                          WHERE k.miner_id = t.miner_id AND k.timestamp = t.timestamp
+                      )
+                    ORDER BY t.id ASC
+                    LIMIT :lim
+                """),
+                {"last_seen_id": int(last_seen_id), "lim": int(batch_limit)},
+            )
+            rows = result.mappings().all()
+
+        if not rows:
+            break
+
+        rows_scanned += len(rows)
+        last_seen_id = int(rows[-1]["id"])
+        records = _prepare_kpi_batch_records(rows, cooling_power_ratio)
+        if records:
+            with engine.begin() as conn:
+                conn.execute(_KPI_INSERT_SQL, records)
+            rows_inserted += len(records)
+
+        if len(rows) < batch_limit:
+            break
+
+    if rows_scanned == 0:
+        logger.info("KPI job: no new telemetry rows to process")
+        return
+    logger.info(
+        "KPI job: inserted %d rows from %d scanned telemetry rows",
+        rows_inserted,
+        rows_scanned,
+    )
 
 
 # ── Inference Job ──────────────────────────────────────────────────────────
@@ -370,10 +465,7 @@ def run_inference_job(engine: Engine):
         logger.info("Inference: no valid timestamped KPI rows in lookback window")
         return
 
-    src_dir = str(Path(__file__).resolve().parents[1] / "src")
-    if src_dir not in sys.path:
-        sys.path.insert(0, src_dir)
-    from feature_engineering import build_serving_feature_snapshot
+    from src.feature_engineering import build_serving_feature_snapshot
 
     feature_df = build_serving_feature_snapshot(
         history_df,
@@ -430,11 +522,31 @@ def _run_heuristic_inference(
         runtime_cfg = _load_runtime_config(engine)
     with engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT DISTINCT ON (miner_id)
-                miner_id, asic_temperature_c, asic_power_w,
-                asic_hashrate_ths, power_instability_index, event_codes
-            FROM kpi_telemetry
-            ORDER BY miner_id, timestamp DESC
+            WITH miners AS (
+                SELECT DISTINCT miner_id
+                FROM kpi_telemetry
+            )
+            SELECT
+                latest.miner_id,
+                latest.asic_temperature_c,
+                latest.asic_power_w,
+                latest.asic_hashrate_ths,
+                latest.power_instability_index,
+                latest.event_codes
+            FROM miners m
+            JOIN LATERAL (
+                SELECT
+                    k.miner_id,
+                    k.asic_temperature_c,
+                    k.asic_power_w,
+                    k.asic_hashrate_ths,
+                    k.power_instability_index,
+                    k.event_codes
+                FROM kpi_telemetry k
+                WHERE k.miner_id = m.miner_id
+                ORDER BY k.timestamp DESC
+                LIMIT 1
+            ) latest ON TRUE
         """))
         rows = result.mappings().all()
 
@@ -458,15 +570,104 @@ def _run_heuristic_inference(
 
 
 def _write_predictions(engine: Engine, df: pd.DataFrame):
-    records = df[["miner_id", "risk_score", "risk_band", "predicted_failure"]].to_dict(orient="records")
+    records = df[
+        ["miner_id", "risk_score", "risk_band", "predicted_failure"]
+    ].to_dict(orient="records")
+    if not records:
+        return
+    for row in records:
+        row["model_version"] = MODEL_VERSION
+
+    upsert_sql = text("""
+        INSERT INTO risk_predictions (
+            predicted_at, miner_id, risk_score, risk_band, predicted_failure, model_version
+        )
+        VALUES (
+            NOW(), :miner_id, :risk_score, :risk_band, :predicted_failure, :model_version
+        )
+        ON CONFLICT (miner_id, model_version)
+        DO UPDATE SET
+            predicted_at = EXCLUDED.predicted_at,
+            risk_score = EXCLUDED.risk_score,
+            risk_band = EXCLUDED.risk_band,
+            predicted_failure = EXCLUDED.predicted_failure
+    """)
+    fallback_insert_sql = text("""
+        INSERT INTO risk_predictions (
+            predicted_at, miner_id, risk_score, risk_band, predicted_failure, model_version
+        )
+        VALUES (
+            NOW(), :miner_id, :risk_score, :risk_band, :predicted_failure, :model_version
+        )
+    """)
+
     with engine.begin() as conn:
+        try:
+            _ensure_risk_predictions_upsert(conn)
+            conn.execute(upsert_sql, records)
+        except Exception as exc:
+            logger.warning(
+                "Risk prediction upsert unavailable; using bounded replace fallback: %s",
+                exc,
+            )
+            miner_ids = sorted(
+                {
+                    str(row["miner_id"]).strip()
+                    for row in records
+                    if str(row.get("miner_id", "")).strip()
+                }
+            )
+            if miner_ids:
+                conn.execute(
+                    text("""
+                        DELETE FROM risk_predictions
+                        WHERE miner_id = ANY(CAST(:miner_ids AS text[]))
+                          AND model_version = :model_version
+                    """),
+                    {"miner_ids": miner_ids, "model_version": MODEL_VERSION},
+                )
+            conn.execute(fallback_insert_sql, records)
+
+
+def _ensure_risk_predictions_upsert(conn) -> None:
+    global _RISK_PREDICTIONS_UPSERT_READY
+    if _RISK_PREDICTIONS_UPSERT_READY:
+        return
+    with _RISK_PREDICTIONS_UPSERT_LOCK:
+        if _RISK_PREDICTIONS_UPSERT_READY:
+            return
+
+        conn.execute(
+            text(
+                "UPDATE risk_predictions SET model_version = 'v1' WHERE model_version IS NULL"
+            )
+        )
         conn.execute(
             text("""
-                INSERT INTO risk_predictions (miner_id, risk_score, risk_band, predicted_failure)
-                VALUES (:miner_id, :risk_score, :risk_band, :predicted_failure)
-            """),
-            records,
+                DELETE FROM risk_predictions rp
+                USING (
+                    SELECT id
+                    FROM (
+                        SELECT
+                            id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY miner_id, model_version
+                                ORDER BY predicted_at DESC, id DESC
+                            ) AS rn
+                        FROM risk_predictions
+                    ) ranked
+                    WHERE ranked.rn > 1
+                ) dupes
+                WHERE rp.id = dupes.id
+            """)
         )
+        conn.execute(
+            text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_risk_predictions_miner_model
+                ON risk_predictions (miner_id, model_version)
+            """)
+        )
+        _RISK_PREDICTIONS_UPSERT_READY = True
 
 
 def _generate_alerts(
@@ -481,11 +682,11 @@ def _generate_alerts(
         return
 
     with engine.connect() as conn:
-        result = conn.execute(text(f"""
+        result = conn.execute(text("""
             SELECT DISTINCT miner_id FROM alerts
             WHERE resolved = FALSE
-              AND created_at >= NOW() - INTERVAL '{int(cooldown_hours)} hours'
-        """))
+              AND created_at >= NOW() - (CAST(:cooldown_hours AS text) || ' hours')::interval
+        """), {"cooldown_hours": int(cooldown_hours)})
         cooldown_miners = {r[0] for r in result}
 
     new_alerts = high_risk[~high_risk["miner_id"].isin(cooldown_miners)]
@@ -582,14 +783,14 @@ def _generate_alerts(
 
 # ── Retrain Job ────────────────────────────────────────────────────────────
 def run_retrain_job(engine: Engine):
-    retrain_days = int(os.getenv("RETRAIN_DAYS", "30"))
     runtime_cfg = _load_runtime_config(engine)
+    retrain_days = int(runtime_cfg.get("retrain_days", RETRAIN_DAYS))
     cooling_power_ratio = max(
         float(runtime_cfg.get("cooling_power_ratio", COOLING_POWER_RATIO)),
         0.0,
     )
     with engine.connect() as conn:
-        result = conn.execute(text(f"""
+        result = conn.execute(text("""
             SELECT timestamp, miner_id, asic_clock_mhz, asic_voltage_v,
                    asic_hashrate_ths, asic_temperature_c, asic_power_w,
                    operating_mode, true_efficiency_te, efficiency_j_per_th,
@@ -599,24 +800,61 @@ def run_retrain_job(engine: Engine):
                    failure_within_horizon,
                    chip_temp_max, expected_hashrate_ths
             FROM kpi_telemetry
-            WHERE timestamp >= NOW() - INTERVAL '{retrain_days} days'
+            WHERE timestamp >= NOW() - (CAST(:retrain_days AS text) || ' days')::interval
             ORDER BY timestamp ASC
-        """), {"cooling_power_ratio": cooling_power_ratio})
+        """), {"cooling_power_ratio": cooling_power_ratio, "retrain_days": retrain_days})
         rows = result.mappings().all()
 
-    if len(rows) < 500:
-        logger.warning("Retrain: not enough data (%d rows), skipping", len(rows))
+    if len(rows) < RETRAIN_MIN_ROWS:
+        logger.warning(
+            "Retrain: not enough data (%d rows < min_rows=%d), skipping",
+            len(rows),
+            RETRAIN_MIN_ROWS,
+        )
         return
 
     df = pd.DataFrame([dict(r) for r in rows])
-    logger.info("Retrain: using %d rows", len(df))
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df = df.dropna(subset=["timestamp"]).copy()
+    if len(df) < RETRAIN_MIN_ROWS:
+        logger.warning(
+            "Retrain: not enough valid timestamped data (%d rows < min_rows=%d), skipping",
+            len(df),
+            RETRAIN_MIN_ROWS,
+        )
+        return
+
+    miner_count = int(df["miner_id"].nunique(dropna=True))
+    if miner_count < RETRAIN_MIN_MINERS:
+        logger.warning(
+            "Retrain: not enough miner diversity (%d miners < min_miners=%d), skipping",
+            miner_count,
+            RETRAIN_MIN_MINERS,
+        )
+        return
+
+    timespan_hours = 0.0
+    if len(df) > 1:
+        delta = df["timestamp"].max() - df["timestamp"].min()
+        timespan_hours = max(delta.total_seconds() / 3600.0, 0.0)
+    if timespan_hours < RETRAIN_MIN_TIMESPAN_HOURS:
+        logger.warning(
+            "Retrain: insufficient time span (%.2fh < min_hours=%.2f), skipping",
+            timespan_hours,
+            RETRAIN_MIN_TIMESPAN_HOURS,
+        )
+        return
+
+    logger.info(
+        "Retrain: using %d rows across %d miners over %.2f hours",
+        len(df),
+        miner_count,
+        timespan_hours,
+    )
 
     try:
-        src_dir = str(Path(__file__).resolve().parents[1] / "src")
-        if src_dir not in sys.path:
-            sys.path.insert(0, src_dir)
-        from feature_engineering import run_feature_engineering
-        from train import run_training_pipeline
+        from src.feature_engineering import run_feature_engineering
+        from src.train import run_training_pipeline
 
         features_df, feature_cols, _, _ = run_feature_engineering(df)
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)

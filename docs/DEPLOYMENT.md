@@ -2,6 +2,7 @@
 
 This guide is the operations runbook for deploying AI Controller in `local`, `staging`, and `production` environments.
 For prioritized execution tickets and sequencing, see `PRODUCTION_BACKLOG.md`.
+For model artifact generation and validation, see `model-generation.md`.
 
 ## Deployment model
 - Runtime: Docker Compose
@@ -27,9 +28,14 @@ cp .env.example .env
 3. Set required secrets and credentials in `.env`:
 - `POSTGRES_PASSWORD`
 - `JWT_SECRET`
+- `APP_SETTINGS_ENCRYPTION_KEY`
 - `ADMIN_USERNAME`
-- `ADMIN_PASSWORD`
+- `ADMIN_PASSWORD_HASH`
+- `ALLOWED_ORIGINS`
+- `AUTH_LOGIN_RATE_LIMIT`
+- `AUTH_COOKIE_SECURE` (`true` under HTTPS)
 - `API_SOURCE_ALLOWLIST`
+- `AUTOMATOR_ENDPOINT_ALLOWLIST` (required if `CONTROL_MODE=actuation`)
 
 ## Local environment
 Use this for developer validation and quick smoke tests.
@@ -86,7 +92,12 @@ docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_a
 docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_runtime_safety_settings.sql
 docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_policy_economics_tuning.sql
 ```
-4. Validate:
+4. If migrating from older data with duplicates, optionally run:
+```bash
+docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_dedup_indexes.sql
+```
+`apply_dedup_indexes.sql` deletes duplicate rows from telemetry hypertables before creating unique indexes. Run only during maintenance and after a successful backup.
+5. Validate:
 ```bash
 docker compose ps
 curl -s http://localhost:8080/api/health
@@ -223,6 +234,8 @@ docker compose up -d --build
 
 ## Security notes
 - Restrict `API_SOURCE_ALLOWLIST` to known vendor domains only.
+- Enforce outbound egress ACLs/proxy policy for worker containers to mitigate DNS rebinding and SSRF bypass attempts.
 - Keep `AUTOMATOR_SIMULATION=true` unless you have a verified external ack path.
 - Use `CONTROL_MODE=actuation` only with explicit operational approval and monitoring.
+- Restrict `AUTOMATOR_ENDPOINT_ALLOWLIST` to trusted control-plane hosts only.
 - Rotate admin/API secrets on a regular schedule.

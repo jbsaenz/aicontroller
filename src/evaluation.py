@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict
-
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -31,7 +29,7 @@ def _pr_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
     return float(auc(recall, precision))
 
 
-def select_optimal_threshold(y_true: np.ndarray, y_score: np.ndarray) -> Dict[str, float]:
+def select_optimal_threshold(y_true: np.ndarray, y_score: np.ndarray) -> dict[str, float]:
     """Select probability threshold maximizing F1 score."""
 
     precision, recall, thresholds = precision_recall_curve(y_true, y_score)
@@ -53,7 +51,7 @@ def select_optimal_threshold(y_true: np.ndarray, y_score: np.ndarray) -> Dict[st
 
 def evaluate_at_threshold(
     y_true: np.ndarray, y_score: np.ndarray, threshold: float
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute classification metrics at a fixed probability threshold."""
 
     y_pred = (y_score >= threshold).astype(int)
@@ -74,7 +72,7 @@ def evaluate_at_threshold(
     }
 
 
-def build_model_evaluation(y_true: np.ndarray, y_score: np.ndarray) -> Dict[str, object]:
+def build_model_evaluation(y_true: np.ndarray, y_score: np.ndarray) -> dict[str, object]:
     """Build default + optimized-threshold evaluation bundle."""
 
     default_metrics = evaluate_at_threshold(y_true, y_score, threshold=0.5)
@@ -121,7 +119,7 @@ def get_confusion_matrix_array(
 
 def get_classification_report_dict(
     y_true: np.ndarray, y_score: np.ndarray, threshold: float
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Return sklearn classification report as dict at given threshold."""
 
     y_pred = (y_score >= threshold).astype(int)

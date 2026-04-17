@@ -34,14 +34,17 @@ def get_source_allowlist() -> list[str]:
     return _parse_allowlist(os.getenv("API_SOURCE_ALLOWLIST", ""))
 
 
+def get_automator_allowlist() -> list[str]:
+    """Return normalized host patterns from AUTOMATOR_ENDPOINT_ALLOWLIST."""
+    return _parse_allowlist(os.getenv("AUTOMATOR_ENDPOINT_ALLOWLIST", ""))
+
+
 def _host_in_allowlist(hostname: str, allowlist: list[str]) -> bool:
     if not allowlist:
         return True
 
     host = hostname.lower()
     for pattern in allowlist:
-        if pattern == "*":
-            return True
         if pattern.startswith("*."):
             base = pattern[2:]
             if host == base or host.endswith(f".{base}"):
@@ -71,10 +74,21 @@ def validate_source_url(url: str) -> None:
         raise UnsafeURLError("; ".join(result["errors"]))
 
 
-def inspect_source_url(url: str) -> dict[str, object]:
-    """Return detailed validation diagnostics for a candidate source URL."""
+def validate_automator_url(url: str) -> None:
+    """Validate automator endpoint URL before command dispatch."""
+    result = inspect_automator_url(url)
+    if not result["valid"]:
+        raise UnsafeURLError("; ".join(result["errors"]))
+
+
+def _inspect_url(
+    *,
+    url: str,
+    allowlist: list[str],
+    allowlist_env_name: str,
+) -> dict[str, object]:
+    """Return detailed validation diagnostics for a candidate URL."""
     parsed = urlparse((url or "").strip())
-    allowlist = get_source_allowlist()
     errors: list[str] = []
 
     result: dict[str, object] = {
@@ -100,9 +114,15 @@ def inspect_source_url(url: str) -> dict[str, object]:
         errors.append("Source hostname is blocked")
 
     if not allowlist:
-        errors.append("API_SOURCE_ALLOWLIST is empty; outbound source URLs are disabled")
+        errors.append(
+            f"{allowlist_env_name} is empty; outbound URLs are disabled"
+        )
+    elif "*" in allowlist:
+        errors.append(
+            f"{allowlist_env_name} cannot include wildcard '*'"
+        )
     elif host and not _host_in_allowlist(host, allowlist):
-        errors.append("Source hostname is not in API_SOURCE_ALLOWLIST")
+        errors.append(f"Source hostname is not in {allowlist_env_name}")
 
     if host and parsed.scheme in ALLOWED_SCHEMES:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -136,3 +156,21 @@ def inspect_source_url(url: str) -> dict[str, object]:
 
     result["valid"] = not errors
     return result
+
+
+def inspect_source_url(url: str) -> dict[str, object]:
+    """Return detailed validation diagnostics for a candidate source URL."""
+    return _inspect_url(
+        url=url,
+        allowlist=get_source_allowlist(),
+        allowlist_env_name="API_SOURCE_ALLOWLIST",
+    )
+
+
+def inspect_automator_url(url: str) -> dict[str, object]:
+    """Return detailed validation diagnostics for automator endpoint URL."""
+    return _inspect_url(
+        url=url,
+        allowlist=get_automator_allowlist(),
+        allowlist_env_name="AUTOMATOR_ENDPOINT_ALLOWLIST",
+    )

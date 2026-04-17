@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
-from config import (
+from src.config import (
     ANOMALIES_OUTPUT_PATH,
     CORRELATION_MATRIX_CSV_PATH,
     EDA_SUMMARY_PATH,
     TRADEOFF_SUMMARY_CSV_PATH,
 )
-from visualization import build_phase3_figures
+from src.visualization import build_phase3_figures, plot_te_timeseries
 
 
 EDA_NUMERIC_COLUMNS = [
@@ -116,7 +115,7 @@ def detect_anomalies(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_eda_summary(
     df: pd.DataFrame, corr_df: pd.DataFrame, anomalies_df: pd.DataFrame
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Build high-level EDA summary for reporting."""
 
     key_pairs = [
@@ -151,7 +150,7 @@ def build_eda_summary(
     }
 
 
-def run_eda_pipeline(df_with_kpi: pd.DataFrame) -> Dict[str, object]:
+def run_eda_pipeline(df_with_kpi: pd.DataFrame) -> dict[str, object]:
     """Run correlation, anomalies, trade-off analysis, and figure generation."""
 
     corr_df = compute_correlation_matrix(df_with_kpi)
@@ -171,6 +170,7 @@ def run_eda_pipeline(df_with_kpi: pd.DataFrame) -> Dict[str, object]:
         json.dump(summary, f, indent=2)
 
     figure_paths = build_phase3_figures(corr_df=corr_df, df_with_kpi=df_with_kpi)
+    figure_paths["te_timeseries"] = plot_te_timeseries(df_with_kpi)
 
     return {
         "correlation_csv": str(CORRELATION_MATRIX_CSV_PATH),

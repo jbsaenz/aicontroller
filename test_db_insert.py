@@ -5,12 +5,13 @@ from sqlalchemy import create_engine, text
 
 
 def main() -> None:
-    engine = create_engine(
-        os.getenv(
-            "DATABASE_URL_SYNC",
-            "postgresql://aicontroller:password12345@localhost:5432/aicontroller",
+    database_url = os.getenv("DATABASE_URL_SYNC", "").strip()
+    if not database_url:
+        raise RuntimeError(
+            "Missing DATABASE_URL_SYNC. "
+            "Set DATABASE_URL_SYNC before running this script."
         )
-    )
+    engine = create_engine(database_url)
     df = pd.read_csv("/tmp/test_advanced_telemetry.csv")
 
     cols = list(df.columns)

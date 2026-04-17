@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
-from config import (
+from src.config import (
     KPI_SUMMARY_PATH,
     KPI_TELEMETRY_CSV_PATH,
     KPI_TELEMETRY_PARQUET_PATH,
@@ -72,7 +71,7 @@ def compute_true_efficiency(
     return working
 
 
-def summarize_kpi(df_with_kpi: pd.DataFrame) -> Dict[str, object]:
+def summarize_kpi(df_with_kpi: pd.DataFrame) -> dict[str, object]:
     """Create KPI summary dictionary for report and metrics export."""
 
     mode_summary = (
@@ -90,7 +89,7 @@ def summarize_kpi(df_with_kpi: pd.DataFrame) -> Dict[str, object]:
         .to_dict(orient="index")
     )
 
-    summary: Dict[str, object] = {
+    summary: dict[str, object] = {
         "rows": int(len(df_with_kpi)),
         "te_stats": {
             "min": float(df_with_kpi["true_efficiency_te"].min()),
@@ -108,14 +107,14 @@ def summarize_kpi(df_with_kpi: pd.DataFrame) -> Dict[str, object]:
 
 def save_kpi_outputs(
     df_with_kpi: pd.DataFrame,
-    summary: Dict[str, object],
+    summary: dict[str, object],
     summary_path: str | Path = KPI_SUMMARY_PATH,
     parquet_path: str | Path = KPI_TELEMETRY_PARQUET_PATH,
     csv_path: str | Path = KPI_TELEMETRY_CSV_PATH,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Save KPI-enriched telemetry and KPI summary."""
 
-    written: Dict[str, str] = {}
+    written: dict[str, str] = {}
 
     summary_out = Path(summary_path)
     summary_out.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +137,7 @@ def save_kpi_outputs(
     return written
 
 
-def run_kpi_pipeline(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, object], Dict[str, str]]:
+def run_kpi_pipeline(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object], dict[str, str]]:
     """Compute TE KPI, summarize it, and persist outputs."""
 
     df_with_kpi = compute_true_efficiency(df)

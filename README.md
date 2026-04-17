@@ -6,6 +6,8 @@ A real-time predictive maintenance platform for large-scale ASIC miner fleets. T
 
 The system utilizes a modular, microservice architecture designed to handle thousands of miners running concurrently:
 
+![Architecture Diagram](reports/architecture_diagram.png)
+
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                      docker compose up                          │
@@ -35,6 +37,7 @@ The system utilizes a modular, microservice architecture designed to handle thou
 This is the production deployment path from a clean machine.
 For environment-specific runbooks (local/staging/production), reverse proxy/TLS, and backup/restore, see `docs/DEPLOYMENT.md`.
 For prioritized implementation work to reach production maturity, see `docs/PRODUCTION_BACKLOG.md`.
+For detailed model build and validation steps, see `docs/model-generation.md`.
 
 ### Prerequisites
 - Git
@@ -43,18 +46,17 @@ For prioritized implementation work to reach production maturity, see `docs/PROD
 - Optional for offline model build: Python 3.11+
 
 ### 1) Clone the repository
-Replace `<owner>` and `<repo>` with your actual GitHub values.
 
 ```bash
-git clone https://github.com/<owner>/<repo>.git
-cd <repo>
+git clone https://github.com/jbsaenz/aicontroller.git
+cd aicontroller
 ```
 
 SSH alternative:
 
 ```bash
-git clone git@github.com:<owner>/<repo>.git
-cd <repo>
+git clone git@github.com:jbsaenz/aicontroller.git
+cd aicontroller
 ```
 
 ### 2) Configure environment
@@ -66,9 +68,23 @@ cp .env.example .env
 Minimum production variables to change before go-live:
 - `POSTGRES_PASSWORD`
 - `JWT_SECRET`
+- `APP_SETTINGS_ENCRYPTION_KEY`
 - `ADMIN_USERNAME`
-- `ADMIN_PASSWORD`
+- `ADMIN_PASSWORD_HASH` (bcrypt hash)
+- `ALLOWED_ORIGINS`
+- `AUTH_LOGIN_RATE_LIMIT` (for brute-force protection)
+- `AUTH_COOKIE_SECURE` (`true` in production TLS deployments)
 - `API_SOURCE_ALLOWLIST` (required for external source polling; empty disables outbound sources)
+
+Generate a bcrypt hash for `ADMIN_PASSWORD_HASH`:
+
+```bash
+python3 - <<'PY'
+from passlib.context import CryptContext
+pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+print(pwd.hash("replace-with-strong-password"))
+PY
+```
 
 Useful ingestion guardrails:
 - `MAX_INGEST_FILE_BYTES` (default `10485760`)
@@ -76,6 +92,7 @@ Useful ingestion guardrails:
 
 ### 3) (Recommended) Build the model artifact before first start
 Without a model artifact, worker inference falls back to heuristic scoring.
+Full model build runbook: `docs/model-generation.md`.
 
 ```bash
 python3 -m venv .venv
@@ -110,6 +127,14 @@ docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_r
 docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_policy_economics_tuning.sql
 ```
 
+If upgrading a legacy deployment with duplicate `(miner_id, timestamp)` rows, run:
+
+```bash
+docker compose exec -T db psql -U aicontroller -d aicontroller < scripts/apply_dedup_indexes.sql
+```
+
+`scripts/apply_dedup_indexes.sql` performs `DELETE` operations on telemetry hypertables and should be run in a maintenance window after taking a database backup.
+
 ### 6) Smoke-test the deployment
 
 ```bash
@@ -124,11 +149,17 @@ Expected health response:
 ```
 
 ### 7) Access the dashboard
-Open **http://localhost:8080** and sign in with your configured admin credentials.
+Open **http://localhost:8080** and sign in with the default credentials:
 
-Default credentials only if unchanged:
-- Username: `admin`
-- Password: `password12345`
+| Field | Value |
+|-------|-------|
+| Username | `admin` |
+| Password | `admin` |
+
+> ⚠️ **Change these credentials before any production deployment.** Update `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in your `.env` file. Generate a new bcrypt hash with:
+> ```bash
+> python3 -c "import bcrypt; print(bcrypt.hashpw(b'your-strong-password', bcrypt.gensalt()).decode())"
+> ```
 
 ### 8) Optional: load synthetic telemetry
 Use the UI `Data Ingestion` tab for real sources, or run:
@@ -169,7 +200,7 @@ docker compose up -d --build
 - **`ml_jobs.py`**: Calculates the *True Efficiency (TE)* KPI formulas on incoming streams. Executes inference runs, banding miners into low, medium, or high risk queues, dynamically creating alerts. Contains heuristic backups for when active models are dropped.
 - Inference uses a configurable historical lookback window (`INFERENCE_LOOKBACK_HOURS`) to rebuild temporal features at serving time, reducing training-serving feature skew.
 - Alert actioning uses an economics-aware policy optimizer with energy price and curtailment inputs, then runs a baseline-vs-optimized backtest before allowing automated actions.
-- **`automator.py`**: The Action Policy Engine. In production-safe default (`CONTROL_MODE=advisory`) it is disabled; set `CONTROL_MODE=actuation` to allow command execution with external acknowledgement. Runtime mode is read from `app_settings.control_mode` (env fallback), so operational mode flips can be applied without container restart.
+- **`automator.py`**: The Action Policy Engine. In production-safe default (`CONTROL_MODE=advisory`) it is disabled; set `CONTROL_MODE=actuation` to allow command execution with external acknowledgement. Set `AUTOMATOR_ENDPOINT_ALLOWLIST` to trusted actuation hosts before enabling production command dispatch. Runtime mode is read from `app_settings.control_mode` (env fallback), so operational mode flips can be applied without container restart.
 - **`notifier.py`**: Dedicated task that sweeps pending database alerts and safely shoots emails (SMTP) and Telegram messages without hitting rate limits.
 
 Policy/economics runtime settings:
@@ -207,6 +238,7 @@ Policy backtest report output:
 ## Offline Analytics Pipeline (Research & Modeling)
 
 If you are performing purely analytical or data-science research workflows generating synthetic models outside the live system, utilize the `src/pipeline.py` standalone tool. 
+For runtime-oriented model build/validation and artifact usage, see `docs/model-generation.md`.
 
 *Requirements: Ensure you are running within a `.venv` utilizing the `requirements.txt`.*
 

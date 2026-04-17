@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,26 +10,26 @@ from pydantic import BaseModel, ConfigDict, Field
 # ── Fleet ──────────────────────────────────────────────────────────────────
 class MinerStatus(BaseModel):
     miner_id: str
-    last_seen: Optional[datetime]
-    asic_hashrate_ths: Optional[float]
-    asic_temperature_c: Optional[float]
-    asic_power_w: Optional[float]
-    asic_voltage_v: Optional[float]
-    asic_clock_mhz: Optional[float]
-    operating_mode: Optional[str]
+    last_seen: datetime | None
+    asic_hashrate_ths: float | None
+    asic_temperature_c: float | None
+    asic_power_w: float | None
+    asic_voltage_v: float | None
+    asic_clock_mhz: float | None
+    operating_mode: str | None
     risk_score: float = 0.0
     risk_band: str = "unknown"
-    predicted_at: Optional[datetime]
+    predicted_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class FleetSummary(BaseModel):
     total_miners: int = 0
-    avg_hashrate: Optional[float]
-    avg_temperature: Optional[float]
-    avg_power: Optional[float]
-    total_hashrate: Optional[float]
+    avg_hashrate: float | None
+    avg_temperature: float | None
+    avg_power: float | None
+    total_hashrate: float | None
     critical_count: int = 0
     high_risk_count: int = 0
     healthy_count: int = 0
@@ -42,13 +41,13 @@ class AlertOut(BaseModel):
     created_at: datetime
     miner_id: str
     severity: str
-    risk_score: Optional[float]
-    trigger_reason: Optional[str]
-    message: Optional[str]
+    risk_score: float | None
+    trigger_reason: str | None
+    message: str | None
     recommended_action: str
     automation_triggered: bool
     resolved: bool
-    resolved_at: Optional[datetime]
+    resolved_at: datetime | None
     email_sent: bool
     telegram_sent: bool
 
@@ -59,22 +58,22 @@ class AlertOut(BaseModel):
 class IngestResult(BaseModel):
     rows_received: int
     rows_inserted: int
-    miners_found: List[str]
-    errors: List[str] = Field(default_factory=list)
+    miners_found: list[str]
+    errors: list[str] = Field(default_factory=list)
 
 
 class ApiSourceIn(BaseModel):
     name: str
     url_template: str
-    auth_headers: Dict[str, str] = Field(default_factory=dict)
-    field_mapping: Dict[str, str] = Field(default_factory=dict)
+    auth_headers: dict[str, str] = Field(default_factory=dict)
+    field_mapping: dict[str, str] = Field(default_factory=dict)
     polling_interval_minutes: int = 10
     enabled: bool = True
 
 
 class ApiSourceOut(ApiSourceIn):
     id: int
-    last_fetched_at: Optional[datetime]
+    last_fetched_at: datetime | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -82,24 +81,24 @@ class ApiSourceOut(ApiSourceIn):
 
 # ── Settings ───────────────────────────────────────────────────────────────
 class SettingsUpdate(BaseModel):
-    settings: Dict[str, str]
+    settings: dict[str, str]
 
 
 class SettingsOut(BaseModel):
-    settings: Dict[str, str]
+    settings: dict[str, str]
 
 
 # ── Analytics ──────────────────────────────────────────────────────────────
 class CorrelationMatrix(BaseModel):
-    columns: List[str]
-    matrix: List[List[Optional[float]]]
+    columns: list[str]
+    matrix: list[list[float | None]]
 
 
 class ScatterPoint(BaseModel):
     x: float
     y: float
     miner_id: str
-    operating_mode: Optional[str]
+    operating_mode: str | None
 
 
 class AnomalyRow(BaseModel):

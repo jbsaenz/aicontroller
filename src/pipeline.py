@@ -5,11 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict
 
 import pandas as pd
 
-from config import (
+from src.config import (
     INGESTION_REPORT_PATH,
     KPI_TELEMETRY_CSV_PATH,
     OUTPUTS_METRICS_DIR,
@@ -18,17 +17,17 @@ from config import (
     RAW_TELEMETRY_PATH,
     DataGenerationConfig,
 )
-from data_generation import generate_synthetic_telemetry, summarize_generated_data
-from eda import run_eda_pipeline
-from feature_engineering import run_feature_engineering
-from ingestion import run_ingestion
-from kpi import run_kpi_pipeline
-from phase5 import run_phase5_evaluation
-from preprocessing import run_preprocessing, save_processed_telemetry
-from train import run_training_pipeline
+from src.data_generation import generate_synthetic_telemetry, summarize_generated_data
+from src.eda import run_eda_pipeline
+from src.feature_engineering import run_feature_engineering
+from src.ingestion import run_ingestion
+from src.kpi import run_kpi_pipeline
+from src.phase5 import run_phase5_evaluation
+from src.preprocessing import run_preprocessing, save_processed_telemetry
+from src.train import run_training_pipeline
 
 
-def _write_json(path: Path, payload: Dict[str, object]) -> None:
+def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
@@ -40,7 +39,7 @@ def run_phase2_data_pipeline(
     freq_minutes: int = 10,
     seed: int = 42,
     prediction_horizon_hours: int = 24,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Generate synthetic telemetry, validate it, and produce cleaned dataset."""
 
     cfg = DataGenerationConfig(
@@ -76,7 +75,7 @@ def run_phase2_data_pipeline(
     }
 
 
-def run_phase3_analysis() -> Dict[str, object]:
+def run_phase3_analysis() -> dict[str, object]:
     """Run Tier 1 EDA + TE KPI analysis on processed telemetry."""
 
     if not PROCESSED_TELEMETRY_CSV_PATH.exists():
@@ -97,7 +96,7 @@ def run_phase3_analysis() -> Dict[str, object]:
     }
 
 
-def run_phase4_modeling() -> Dict[str, object]:
+def run_phase4_modeling() -> dict[str, object]:
     """Run Phase 4 feature engineering and baseline model training."""
 
     if not KPI_TELEMETRY_CSV_PATH.exists():
@@ -121,7 +120,7 @@ def run_phase4_modeling() -> Dict[str, object]:
     }
 
 
-def run_phase5_reporting() -> Dict[str, object]:
+def run_phase5_reporting() -> dict[str, object]:
     """Run Phase 5 evaluation/reporting on Phase 4 outputs."""
 
     phase4_result = run_phase4_modeling()

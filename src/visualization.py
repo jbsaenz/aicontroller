@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
 
 import matplotlib
 
@@ -14,7 +13,7 @@ import pandas as pd
 import seaborn as sns
 from sklearn.metrics import auc, precision_recall_curve, roc_curve
 
-from config import OUTPUTS_FIGURES_DIR
+from src.config import OUTPUTS_FIGURES_DIR
 
 sns.set_theme(style="whitegrid", context="notebook")
 
@@ -97,7 +96,7 @@ def plot_te_distribution_by_mode(df: pd.DataFrame) -> str:
     return str(out_path)
 
 
-def build_phase3_figures(corr_df: pd.DataFrame, df_with_kpi: pd.DataFrame) -> Dict[str, str]:
+def build_phase3_figures(corr_df: pd.DataFrame, df_with_kpi: pd.DataFrame) -> dict[str, str]:
     """Generate all Phase 3 required figures."""
 
     return {
@@ -205,5 +204,138 @@ def plot_phase5_risk_distribution(risk_df: pd.DataFrame) -> str:
     ax.set_ylabel("Density")
     plt.tight_layout()
     fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return str(out_path)
+
+
+def plot_feature_importance(importance_csv_path: str | None = None) -> str:
+    """Render horizontal bar chart of top 20 model features."""
+
+    out_dir = _ensure_output_dir()
+    out_path = out_dir / "phase4_feature_importance.png"
+
+    if importance_csv_path is None:
+        from src.config import PHASE4_FEATURE_IMPORTANCE_PATH
+        importance_csv_path = str(PHASE4_FEATURE_IMPORTANCE_PATH)
+
+    imp_df = pd.read_csv(importance_csv_path)
+    top_20 = imp_df.head(20).sort_values("importance", ascending=True)
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    colors = plt.cm.viridis(np.linspace(0.25, 0.85, len(top_20)))
+    ax.barh(top_20["feature"], top_20["importance"], color=colors)
+    ax.set_xlabel("Importance (absolute)")
+    ax.set_title("Top 20 Predictive Features")
+    ax.grid(axis="x", alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return str(out_path)
+
+
+def plot_mode_performance_breakdown(
+    risk_df: pd.DataFrame, threshold: float = 0.5
+) -> str:
+    """Render per-mode precision/recall/F1 grouped bar chart."""
+
+    from sklearn.metrics import f1_score, precision_score, recall_score
+
+    out_dir = _ensure_output_dir()
+    out_path = out_dir / "phase5_mode_performance.png"
+
+    working = risk_df.copy()
+    working["y_pred"] = (working["risk_score"] >= threshold).astype(int)
+    working["y_true"] = working["failure_within_horizon"].astype(int)
+
+    modes = ["eco", "normal", "turbo"]
+    metrics_data = {"mode": [], "Precision": [], "Recall": [], "F1": []}
+    for mode in modes:
+        subset = working[working["operating_mode"] == mode]
+        if len(subset) == 0 or subset["y_true"].nunique() < 2:
+            continue
+        metrics_data["mode"].append(mode)
+        metrics_data["Precision"].append(
+            precision_score(subset["y_true"], subset["y_pred"], zero_division=0)
+        )
+        metrics_data["Recall"].append(
+            recall_score(subset["y_true"], subset["y_pred"], zero_division=0)
+        )
+        metrics_data["F1"].append(
+            f1_score(subset["y_true"], subset["y_pred"], zero_division=0)
+        )
+
+    if not metrics_data["mode"]:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "Insufficient data by mode", ha="center", va="center")
+        fig.savefig(out_path, dpi=180)
+        plt.close(fig)
+        return str(out_path)
+
+    metrics_df = pd.DataFrame(metrics_data)
+    melted = metrics_df.melt(id_vars="mode", var_name="Metric", value_name="Score")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    x = np.arange(len(metrics_data["mode"]))
+    width = 0.25
+    for i, metric in enumerate(["Precision", "Recall", "F1"]):
+        vals = metrics_df[metric].to_numpy()
+        offset = (i - 1) * width
+        bars = ax.bar(x + offset, vals, width, label=metric, alpha=0.85)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                    f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics_data["mode"])
+    ax.set_ylabel("Score")
+    ax.set_title("Prediction Performance by Operating Mode")
+    ax.legend()
+    ax.set_ylim(0, 1.0)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return str(out_path)
+
+
+def plot_te_timeseries(df: pd.DataFrame, n_miners: int = 4) -> str:
+    """Render TE time-series for a few miners showing healthy vs degrading patterns."""
+
+    out_dir = _ensure_output_dir()
+    out_path = out_dir / "phase3_te_timeseries.png"
+
+    working = df.copy()
+    working["timestamp"] = pd.to_datetime(working["timestamp"], errors="coerce")
+
+    # Pick miners with diverse TE behavior: highest and lowest mean TE
+    miner_te = working.groupby("miner_id")["true_efficiency_te"].mean().sort_values()
+    if len(miner_te) < n_miners:
+        selected = miner_te.index.tolist()
+    else:
+        half = n_miners // 2
+        selected = miner_te.head(half).index.tolist() + miner_te.tail(n_miners - half).index.tolist()
+
+    fig, axes = plt.subplots(len(selected), 1, figsize=(12, 3 * len(selected)), sharex=True)
+    if len(selected) == 1:
+        axes = [axes]
+
+    for ax, miner_id in zip(axes, selected):
+        miner_data = working[working["miner_id"] == miner_id].sort_values("timestamp")
+        ax.plot(miner_data["timestamp"], miner_data["true_efficiency_te"],
+                linewidth=0.8, alpha=0.7, color="steelblue")
+        # Add rolling mean overlay
+        roll = miner_data["true_efficiency_te"].rolling(window=12, min_periods=1).mean()
+        ax.plot(miner_data["timestamp"], roll, linewidth=1.5, color="orangered",
+                label="2h rolling mean")
+        mean_te = miner_data["true_efficiency_te"].mean()
+        ax.set_ylabel("TE")
+        ax.set_title(f"{miner_id} — mean TE: {mean_te:.4f}", fontsize=10)
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(alpha=0.3)
+
+    axes[-1].set_xlabel("Time")
+    fig.suptitle("True Efficiency Over Time (Selected Miners)", fontsize=13, y=1.01)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
     return str(out_path)

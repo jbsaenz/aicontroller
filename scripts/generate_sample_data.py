@@ -14,6 +14,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Default output anchored to repository root (not caller CWD).
+DEFAULT_OUTPUT_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "sample_telemetry.csv"
+)
+
 # ── Antminer S19/S21 realistic specs ──────────────────────────────────────
 MODE_PARAMS = {
     "eco":    {"clock": 480, "voltage": 11.9, "hash_mult": 0.88, "power_offset": -280},
@@ -135,7 +140,7 @@ def _simulate_miner(miner_id: str, timestamps: pd.DatetimeIndex,
 
 
 def generate(n_miners: int = 50, days: int = 7, freq_minutes: int = 15,
-             seed: int = 42, output: str = "data/sample_telemetry.csv") -> str:
+             seed: int = 42, output: str | Path = DEFAULT_OUTPUT_PATH) -> str:
     rng = np.random.default_rng(seed)
     end_ts = pd.Timestamp.utcnow().floor('15min')
     timestamps = pd.date_range(
@@ -189,7 +194,12 @@ def main():
     parser.add_argument("--days",    type=int, default=7,     help="Days of history (default: 7)")
     parser.add_argument("--freq",    type=int, default=15,    help="Interval in minutes (default: 15)")
     parser.add_argument("--seed",    type=int, default=42,    help="Random seed (default: 42)")
-    parser.add_argument("--output",  type=str, default="data/sample_telemetry.csv", help="Output CSV path")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=str(DEFAULT_OUTPUT_PATH),
+        help="Output CSV path",
+    )
     args = parser.parse_args()
 
     print(f"Generating {args.miners} miners × {args.days} days @ {args.freq}min intervals...")

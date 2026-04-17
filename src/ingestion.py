@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from config import (
+from src.config import (
     INGESTION_REPORT_PATH,
     NUMERIC_COLUMNS,
     PLAUSIBLE_RANGES,
@@ -23,14 +22,14 @@ def load_raw_telemetry(csv_path: str | Path = RAW_TELEMETRY_PATH) -> pd.DataFram
     return pd.read_csv(csv_path)
 
 
-def _detect_missing_and_extra_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:
+def _detect_missing_and_extra_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     extra = [c for c in df.columns if c not in REQUIRED_COLUMNS]
     return missing, extra
 
 
-def _compute_range_violations(df: pd.DataFrame) -> Dict[str, int]:
-    violations: Dict[str, int] = {}
+def _compute_range_violations(df: pd.DataFrame) -> dict[str, int]:
+    violations: dict[str, int] = {}
     for col, (lower, upper) in PLAUSIBLE_RANGES.items():
         if col not in df.columns:
             violations[col] = -1
@@ -41,7 +40,7 @@ def _compute_range_violations(df: pd.DataFrame) -> Dict[str, int]:
     return violations
 
 
-def build_ingestion_report(df: pd.DataFrame) -> Dict[str, object]:
+def build_ingestion_report(df: pd.DataFrame) -> dict[str, object]:
     """Build a schema and quality report for raw telemetry."""
 
     missing_cols, extra_cols = _detect_missing_and_extra_columns(df)
@@ -56,7 +55,7 @@ def build_ingestion_report(df: pd.DataFrame) -> Dict[str, object]:
             parsed = pd.to_numeric(df[col], errors="coerce")
             numeric_parse_nulls[col] = int(parsed.isna().sum())
 
-    report: Dict[str, object] = {
+    report: dict[str, object] = {
         "rows": int(len(df)),
         "columns_count": int(df.shape[1]),
         "missing_required_columns": missing_cols,
@@ -80,7 +79,7 @@ def validate_required_schema(df: pd.DataFrame) -> None:
 def run_ingestion(
     csv_path: str | Path = RAW_TELEMETRY_PATH,
     report_path: str | Path = INGESTION_REPORT_PATH,
-) -> Tuple[pd.DataFrame, Dict[str, object]]:
+) -> tuple[pd.DataFrame, dict[str, object]]:
     """Load telemetry and return dataframe plus schema/quality report."""
 
     df = load_raw_telemetry(csv_path)

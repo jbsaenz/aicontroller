@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import joblib
 import numpy as np
@@ -15,15 +14,16 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
 
-from config import (
+from src.config import (
     PHASE4_BEST_MODEL_SUMMARY_PATH,
     PHASE4_FEATURE_IMPORTANCE_PATH,
     PHASE4_MODEL_ARTIFACT_PATH,
     PHASE4_MODEL_COMPARISON_PATH,
 )
-from evaluation import build_model_evaluation
-from inference import build_risk_outputs, save_risk_outputs
+from src.evaluation import build_model_evaluation
+from src.inference import build_risk_outputs, save_risk_outputs
 
 
 def _derive_cooling_power_ratio(features_df: pd.DataFrame, default: float = 0.24) -> float:
@@ -45,7 +45,7 @@ def _derive_cooling_power_ratio(features_df: pd.DataFrame, default: float = 0.24
 
 def _time_split(
     df: pd.DataFrame, split_quantile: float = 0.80
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     ordered = df.sort_values("timestamp").reset_index(drop=True)
     cutoff = ordered["timestamp"].quantile(split_quantile)
     train_df = ordered[ordered["timestamp"] <= cutoff].copy()
@@ -59,7 +59,7 @@ def _time_split(
 
 
 def _build_preprocessor(
-    numeric_cols: List[str], categorical_cols: List[str]
+    numeric_cols: list[str], categorical_cols: list[str]
 ) -> ColumnTransformer:
     return ColumnTransformer(
         transformers=[
@@ -98,7 +98,7 @@ def _extract_feature_importance(
 
     feature_names = preprocessor.get_feature_names_out()
 
-    if model_name == "random_forest":
+    if model_name in ("random_forest", "xgboost"):
         importance = estimator.feature_importances_
     elif model_name == "logistic_regression":
         coeff = estimator.coef_[0]
@@ -114,10 +114,10 @@ def _extract_feature_importance(
 
 def run_training_pipeline(
     features_df: pd.DataFrame,
-    feature_cols: List[str],
+    feature_cols: list[str],
     target_col: str = "failure_within_horizon",
     model_artifact_path: Path | str | None = None,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Train baseline models, compare results, and save best model outputs."""
 
     working = features_df.copy()
@@ -136,6 +136,11 @@ def run_training_pipeline(
     categorical_cols = [c for c in feature_cols if c == "operating_mode"]
     numeric_cols = [c for c in feature_cols if c not in categorical_cols]
 
+    # Estimate scale_pos_weight for XGBoost from class imbalance.
+    n_neg = int(np.sum(y_train == 0))
+    n_pos = max(1, int(np.sum(y_train == 1)))
+    xgb_scale_pos_weight = max(1.0, n_neg / n_pos)
+
     models = {
         "logistic_regression": LogisticRegression(
             max_iter=1200,
@@ -150,11 +155,22 @@ def run_training_pipeline(
             random_state=42,
             n_jobs=-1,
         ),
+        "xgboost": XGBClassifier(
+            n_estimators=400,
+            max_depth=8,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            scale_pos_weight=xgb_scale_pos_weight,
+            eval_metric="logloss",
+            random_state=42,
+            n_jobs=-1,
+        ),
     }
 
-    comparison: Dict[str, Dict[str, object]] = {}
-    fitted_models: Dict[str, Pipeline] = {}
-    y_scores: Dict[str, np.ndarray] = {}
+    comparison: dict[str, dict[str, object]] = {}
+    fitted_models: dict[str, Pipeline] = {}
+    y_scores: dict[str, np.ndarray] = {}
 
     for name, estimator in models.items():
         pipeline = Pipeline(

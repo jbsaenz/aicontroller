@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any
 from zoneinfo import ZoneInfo
+
+from src.runtime_utils import is_truthy
 
 
 ACTIONS = [
@@ -59,12 +62,6 @@ DEFAULT_HASHPRICE_USD_PER_PH_DAY = 55.0
 DEFAULT_CURTAILMENT_PENALTY_MULTIPLIER = 2.0
 DEFAULT_POLICY_FAILURE_COST_USD = 300.0
 DEFAULT_POLICY_REWARD_PER_TH_HOUR_USD = DEFAULT_HASHPRICE_USD_PER_PH_DAY / 1000.0 / 24.0
-
-
-def _is_truthy(value: Any, default: bool) -> bool:
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _to_float(value: Any, default: float) -> float:
@@ -131,7 +128,11 @@ def _parse_curtailment_windows(raw: Any) -> list[tuple[int, int]]:
             continue
         start_hour = int(_to_float(item.get("start_hour"), -1))
         end_hour = int(_to_float(item.get("end_hour"), -1))
-        if 0 <= start_hour <= 23 and 0 <= end_hour <= 23:
+        if (
+            0 <= start_hour <= 23
+            and 0 <= end_hour <= 23
+            and start_hour != end_hour
+        ):
             windows.append((start_hour, end_hour))
     return windows
 
@@ -155,9 +156,11 @@ def parse_policy_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     )
 
     return {
-        "optimizer_enabled": _is_truthy(data.get("policy_optimizer_enabled"), True),
-        "require_backtest_for_automation": _is_truthy(
-            data.get("automation_require_policy_backtest"), True
+        "optimizer_enabled": is_truthy(
+            data.get("policy_optimizer_enabled"), default=True
+        ),
+        "require_backtest_for_automation": is_truthy(
+            data.get("automation_require_policy_backtest"), default=True
         ),
         "min_uplift_usd_per_miner": _to_float(
             data.get("policy_min_uplift_usd_per_miner"), 0.25
@@ -215,7 +218,7 @@ def _parse_timestamp(value: Any) -> datetime:
 
 def _hour_is_in_window(hour: int, start_hour: int, end_hour: int) -> bool:
     if start_hour == end_hour:
-        return True
+        return False
     if start_hour < end_hour:
         return start_hour <= hour < end_hour
     return hour >= start_hour or hour < end_hour

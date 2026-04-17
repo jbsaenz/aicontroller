@@ -1,7 +1,8 @@
 """Analytics: correlations, trade-offs, anomalies, TE distribution."""
 
+import os
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
@@ -26,13 +27,61 @@ ROLLUP_COLUMNS = {
     "efficiency_j_per_th": "avg_efficiency_j_per_th",
     "true_efficiency_te": "avg_true_efficiency_te",
 }
+ANALYTICS_ROLLUP_SCHEMA_CACHE_SECONDS = max(
+    0,
+    int(os.getenv("ANALYTICS_ROLLUP_SCHEMA_CACHE_SECONDS", "300")),
+)
+# NOTE: This mutable module-level dict is safe under uvicorn's default
+# single-process asyncio model because Python's GIL guarantees atomic dict
+# updates at the bytecode level. If deploying with multiple workers
+# (--workers N), each process gets its own copy — which is acceptable since
+# the cache is just a performance optimization for a cheap DB catalogue check.
+_ROLLUP_SCHEMA_EXISTS_CACHE = {
+    "value": None,
+    "expires_at": 0.0,
+}
 
 
 async def _has_kpi_rollup(db: AsyncSession) -> bool:
+    now = time.monotonic()
+    cached = _ROLLUP_SCHEMA_EXISTS_CACHE["value"]
+    if cached is not None and now < _ROLLUP_SCHEMA_EXISTS_CACHE["expires_at"]:
+        return bool(cached)
+
     result = await db.execute(
         text("SELECT to_regclass('public.kpi_hourly_rollup') IS NOT NULL")
     )
+    exists = bool(result.scalar())
+    _ROLLUP_SCHEMA_EXISTS_CACHE["value"] = exists
+    _ROLLUP_SCHEMA_EXISTS_CACHE["expires_at"] = (
+        now + ANALYTICS_ROLLUP_SCHEMA_CACHE_SECONDS
+    )
+    return exists
+
+
+async def _rollup_has_rows_in_window(
+    db: AsyncSession, start_dt: datetime, end_dt: datetime
+) -> bool:
+    result = await db.execute(
+        text("""
+            SELECT EXISTS(
+                SELECT 1
+                FROM kpi_hourly_rollup
+                WHERE bucket >= :start_dt AND bucket <= :end_dt
+                LIMIT 1
+            )
+        """),
+        {"start_dt": start_dt, "end_dt": end_dt},
+    )
     return bool(result.scalar())
+
+
+async def _should_use_rollup(
+    db: AsyncSession, start_dt: datetime, end_dt: datetime
+) -> bool:
+    if not await _has_kpi_rollup(db):
+        return False
+    return await _rollup_has_rows_in_window(db, start_dt, end_dt)
 
 
 def _correlation_source_sql(use_rollup: bool) -> str:
@@ -57,10 +106,10 @@ def _correlation_source_sql(use_rollup: bool) -> str:
 
 def _build_correlation_sql(use_rollup: bool) -> str:
     corr_exprs = []
-    for row_idx, left_col in enumerate(KPI_COLS):
-        for col_idx, right_col in enumerate(KPI_COLS):
+    for left_col in KPI_COLS:
+        for right_col in KPI_COLS:
             corr_exprs.append(
-                f"ROUND(CORR({left_col}, {right_col})::numeric, 3) AS c_{row_idx}_{col_idx}"
+                f"ROUND(CORR({left_col}, {right_col})::numeric, 3) AS {_correlation_alias(left_col, right_col)}"
             )
 
     source_sql = _correlation_source_sql(use_rollup)
@@ -71,6 +120,10 @@ def _build_correlation_sql(use_rollup: bool) -> str:
         SELECT {", ".join(corr_exprs)}
         FROM scoped
     """
+
+
+def _correlation_alias(left_col: str, right_col: str) -> str:
+    return f"corr__{left_col}__{right_col}"
 
 
 def _build_anomaly_sql() -> str:
@@ -102,7 +155,7 @@ def _build_anomaly_sql() -> str:
         WITH scoped AS (
             SELECT miner_id, timestamp, asic_clock_mhz, asic_voltage_v,
                    asic_hashrate_ths, asic_temperature_c, asic_power_w
-            FROM telemetry
+            FROM kpi_telemetry
             WHERE timestamp >= :start_dt AND timestamp <= :end_dt
         ),
         stats AS (
@@ -132,14 +185,14 @@ ANOMALY_SQL = text(_build_anomaly_sql())
 @router.get("/analytics/correlations")
 async def get_correlations(
     hours: int = Query(168, ge=1, le=720),
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
     end_dt = end_time or datetime.now(timezone.utc)
     start_dt = start_time or (end_dt - timedelta(hours=hours))
-    use_rollup = await _has_kpi_rollup(db)
+    use_rollup = await _should_use_rollup(db, start_dt, end_dt)
 
     result = await db.execute(
         text(_build_correlation_sql(use_rollup)),
@@ -151,10 +204,10 @@ async def get_correlations(
 
     matrix = []
     has_values = False
-    for row_idx in range(len(KPI_COLS)):
+    for left_col in KPI_COLS:
         matrix_row = []
-        for col_idx in range(len(KPI_COLS)):
-            value = row.get(f"c_{row_idx}_{col_idx}")
+        for right_col in KPI_COLS:
+            value = row.get(_correlation_alias(left_col, right_col))
             if value is not None:
                 has_values = True
                 matrix_row.append(float(value))
@@ -174,15 +227,15 @@ async def get_correlations(
 @router.get("/analytics/tradeoffs")
 async def get_tradeoffs(
     hours: int = Query(168, ge=1, le=720),
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     limit: int = Query(2000, le=5000),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
     end_dt = end_time or datetime.now(timezone.utc)
     start_dt = start_time or (end_dt - timedelta(hours=hours))
-    use_rollup = await _has_kpi_rollup(db)
+    use_rollup = await _should_use_rollup(db, start_dt, end_dt)
 
     if use_rollup:
         query = text("""
@@ -221,8 +274,8 @@ async def get_tradeoffs(
 @router.get("/analytics/anomalies")
 async def get_anomalies(
     hours: int = Query(24, ge=1, le=168),
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
@@ -238,14 +291,14 @@ async def get_anomalies(
 @router.get("/analytics/efficiency")
 async def get_efficiency_distribution(
     hours: int = Query(168, ge=1, le=720),
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
     end_dt = end_time or datetime.now(timezone.utc)
     start_dt = start_time or (end_dt - timedelta(hours=hours))
-    use_rollup = await _has_kpi_rollup(db)
+    use_rollup = await _should_use_rollup(db, start_dt, end_dt)
 
     if use_rollup:
         query = text("""

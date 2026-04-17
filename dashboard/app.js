@@ -2,7 +2,6 @@
 'use strict';
 
 const API = '';  // same origin
-let TOKEN = localStorage.getItem('aic_token') || '';
 let FLEET_DATA = [];
 let ALERT_COUNT = 0;
 let refreshTimer = null;
@@ -11,17 +10,49 @@ let SOURCE_URL_VALIDATION = null;
 let SOURCE_ALLOWLIST_INFO = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+const HTML_ESCAPE_MAP = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+  '`': '&#96;',
+};
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"'`]/g, (ch) => HTML_ESCAPE_MAP[ch]);
+}
+
+function safeClassToken(value, fallback = 'unknown') {
+  const token = String(value ?? '').trim().toLowerCase();
+  return /^[a-z0-9_-]+$/.test(token) ? token : fallback;
+}
+
+function asNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 async function api(path, opts = {}) {
+  const { suppressAuthRedirect, ...rest } = opts;
+  const headers = { ...(rest.headers || {}) };
+  if (!(rest.body instanceof FormData) && !headers['Content-Type'] && !headers['content-type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const res = await fetch(API + path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
-      ...(opts.headers || {}),
-    },
+    ...rest,
+    credentials: 'include',
+    headers,
   });
-  if (res.status === 401) { logout(); return null; }
+  if (res.status === 401) {
+    if (!suppressAuthRedirect) showLogin();
+    return null;
+  }
   if (!res.ok) { const t = await res.text(); throw new Error(t); }
+  if (res.status === 204) return null;
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) return null;
   return res.json();
 }
 
@@ -38,18 +69,22 @@ function timeAgo(dt) {
   if (s < 86400) return `${Math.floor(s/3600)}h ago`;
   return `${Math.floor(s/86400)}d ago`;
 }
-function riskClass(band) { return `risk-${(band || 'low').toLowerCase()}`; }
+function riskClass(band) { return `risk-${safeClassToken(band, 'low')}`; }
 
 // ── Auth ───────────────────────────────────────────────────────────────────
-function logout() {
-  TOKEN = '';
-  localStorage.removeItem('aic_token');
+async function logout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+  } catch (e) {
+    console.warn('Logout request failed', e);
+  }
   showLogin();
 }
 
 function showLogin() {
   document.getElementById('login-page').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
+  document.getElementById('sidebar-user').textContent = '';
   if (refreshTimer) clearInterval(refreshTimer);
 }
 
@@ -69,14 +104,13 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   try {
     const data = await fetch('/api/auth/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: user, password: pass }),
     });
     if (!data.ok) throw new Error('Invalid credentials');
     const json = await data.json();
-    TOKEN = json.access_token;
-    localStorage.setItem('aic_token', TOKEN);
-    document.getElementById('sidebar-user').textContent = json.username;
+    document.getElementById('sidebar-user').textContent = json?.username || user;
     showApp();
   } catch {
     err.textContent = 'Invalid username or password.';
@@ -149,7 +183,8 @@ function renderFleetGrid(fleet) {
   const grid = document.getElementById('miner-grid');
 
   const filtered = fleet.filter(m => {
-    if (search && !m.miner_id.toLowerCase().includes(search)) return false;
+    const minerId = String(m?.miner_id || '').toLowerCase();
+    if (search && !minerId.includes(search)) return false;
     if (filter && filter !== 'all' && m.risk_band !== filter) return false;
     return true;
   });
@@ -159,14 +194,17 @@ function renderFleetGrid(fleet) {
     return;
   }
 
-  grid.innerHTML = filtered.map(m => {
+  grid.innerHTML = filtered.map((m, idx) => {
     const rc = riskClass(m.risk_band);
-    const score = (m.risk_score || 0);
+    const score = asNumber(m.risk_score, 0);
     const pct = (score * 100).toFixed(1);
-    const mode = m.operating_mode || 'normal';
+    const mode = String(m.operating_mode || 'normal').toLowerCase();
+    const modeClass = safeClassToken(mode, 'normal');
+    const minerLabel = esc(m.miner_id);
+    const modeLabel = esc(mode.toUpperCase());
     return `
-      <div class="miner-card ${rc}" onclick="openMinerModal('${m.miner_id}')">
-        <div class="miner-id">⛏ ${m.miner_id}</div>
+      <div class="miner-card ${rc}" data-miner-idx="${idx}">
+        <div class="miner-id">⛏ ${minerLabel}</div>
         <div class="miner-metrics">
           <div class="metric"><div class="metric-label">Hashrate</div><div class="metric-value">${fmt(m.asic_hashrate_ths, 1)} TH/s</div></div>
           <div class="metric"><div class="metric-label">Temp</div><div class="metric-value">${fmt(m.asic_temperature_c, 1)}°C</div></div>
@@ -180,10 +218,20 @@ function renderFleetGrid(fleet) {
           </div>
           <div class="risk-bar"><div class="risk-bar-fill ${rc}" style="width:${pct}%"></div></div>
         </div>
-        <div class="miner-mode mode-${mode}">${mode.toUpperCase()}</div>
+        <div class="miner-mode mode-${modeClass}">${modeLabel}</div>
         <div class="text-muted text-sm mt-16">${timeAgo(m.last_seen)}</div>
       </div>`;
   }).join('');
+
+  grid.querySelectorAll('.miner-card[data-miner-idx]').forEach((card) => {
+    const idx = Number(card.getAttribute('data-miner-idx'));
+    card.addEventListener('click', () => {
+      const miner = filtered[idx];
+      if (miner?.miner_id) {
+        openMinerModal(String(miner.miner_id));
+      }
+    });
+  });
 }
 
 document.getElementById('fleet-search').addEventListener('input', () => renderFleetGrid(FLEET_DATA));
@@ -198,10 +246,11 @@ async function openMinerModal(minerId) {
   activeCharts = {};
 
   try {
+    const encodedMinerId = encodeURIComponent(minerId);
     const [history, kpi, risk] = await Promise.all([
-      api(`/api/miners/${minerId}?hours=168`),
-      api(`/api/miners/${minerId}/kpi?hours=168`),
-      api(`/api/miners/${minerId}/risk?hours=168`),
+      api(`/api/miners/${encodedMinerId}?hours=168`),
+      api(`/api/miners/${encodedMinerId}/kpi?hours=168`),
+      api(`/api/miners/${encodedMinerId}/risk?hours=168`),
     ]);
     renderMinerCharts(minerId, history, kpi, risk);
   } catch(e) { console.error('Modal load failed', e); }
@@ -274,9 +323,15 @@ async function loadAnalytics(hours) {
 }
 
 function renderCorrelationHeatmap(data) {
-  if (!data?.columns?.length) return;
   const canvas = document.getElementById('corr-canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas?.getContext('2d');
+  if (!canvas || !ctx) return;
+  // Reset canvas to avoid stale drawings when rerendering/empty payloads.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!data?.columns?.length || !data?.matrix?.length) return;
+
   const cols = data.columns.map(c => c.replace('asic_', '').replace('_', ' '));
   const n = cols.length;
   const cell = Math.floor(Math.min(canvas.width, canvas.height) / n);
@@ -308,7 +363,16 @@ function renderCorrelationHeatmap(data) {
 }
 
 function renderTradeoffCharts(data) {
-  if (!data?.length) return;
+  const tradeoffCanvasIds = ['to-power-hash', 'to-temp-hash', 'to-clock-hash', 'to-voltage-temp'];
+  if (!data?.length) {
+    tradeoffCanvasIds.forEach((id) => {
+      if (activeCharts[id]) {
+        activeCharts[id].destroy();
+        delete activeCharts[id];
+      }
+    });
+    return;
+  }
   const COLORS = { eco: '#10b981', normal: '#3b82f6', turbo: '#ef4444' };
   const datasets = (xKey, yKey) => {
     const byMode = {};
@@ -349,12 +413,12 @@ function renderAnomalies(anomalies, hours) {
   }
   tbody.innerHTML = anomalies.slice(0,50).map(a => `
     <tr>
-      <td>${a.miner_id}</td>
-      <td class="text-muted">${new Date(a.timestamp).toLocaleString()}</td>
-      <td>${a.field.replace('asic_','')}</td>
+      <td>${esc(a.miner_id)}</td>
+      <td class="text-muted">${esc(new Date(a.timestamp).toLocaleString())}</td>
+      <td>${esc(String(a.field || '').replace('asic_',''))}</td>
       <td>${fmt(a.value, 2)}</td>
       <td>${fmt(a.z_score, 2)}σ</td>
-      <td><span class="badge badge-${a.severity}">${a.severity}</span></td>
+      <td><span class="badge badge-${safeClassToken(a.severity, 'warning')}">${esc(a.severity)}</span></td>
     </tr>`).join('');
 }
 
@@ -374,14 +438,14 @@ function renderAlertsTable(alerts) {
   }
   tbody.innerHTML = alerts.map(a => `
     <tr>
-      <td>${new Date(a.created_at).toLocaleString()}</td>
-      <td><b>${a.miner_id}</b></td>
-      <td><span class="badge badge-${a.severity}">${a.severity}</span></td>
+      <td>${esc(new Date(a.created_at).toLocaleString())}</td>
+      <td><b>${esc(a.miner_id)}</b></td>
+      <td><span class="badge badge-${safeClassToken(a.severity, 'warning')}">${esc(a.severity)}</span></td>
       <td>${a.risk_score ? (a.risk_score*100).toFixed(1)+'%' : '—'}</td>
-      <td class="text-muted">${a.trigger_reason || '—'}</td>
-      <td><span class="badge ${a.recommended_action !== 'CONTINUE' ? 'badge-warn' : ''}">${a.recommended_action || 'CONTINUE'}</span> ${a.automation_triggered ? '🤖':''}</td>
+      <td class="text-muted">${esc(a.trigger_reason || '—')}</td>
+      <td><span class="badge ${a.recommended_action !== 'CONTINUE' ? 'badge-warn' : ''}">${esc(a.recommended_action || 'CONTINUE')}</span> ${a.automation_triggered ? '🤖':''}</td>
       <td>${a.email_sent?'✉️':'—'} ${a.telegram_sent?'📨':'—'}</td>
-      <td><button class="btn btn-sm btn-ghost" onclick="resolveAlert(${a.id}, this)">Resolve</button></td>
+      <td><button class="btn btn-sm btn-ghost" onclick="resolveAlert(${asNumber(a.id, 0)}, this)">Resolve</button></td>
     </tr>`).join('');
 }
 
@@ -416,13 +480,14 @@ async function handleUpload(file) {
     document.querySelector('.progress-bar-fill').style.width = '70%';
     const res = await fetch('/api/ingest/csv', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      credentials: 'include',
       body: form,
     });
     document.querySelector('.progress-bar-fill').style.width = '100%';
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
-    result.innerHTML = `✅ <b>${data.rows_inserted}</b> rows inserted | <b>${data.miners_found.length}</b> miners | ${data.errors.length ? '⚠️ '+data.errors.join(', ') : 'No errors'}`;
+    const safeErrors = (data.errors || []).map((e) => esc(e)).join(', ');
+    result.innerHTML = `✅ <b>${asNumber(data.rows_inserted, 0)}</b> rows inserted | <b>${asNumber(data?.miners_found?.length, 0)}</b> miners | ${safeErrors ? '⚠️ ' + safeErrors : 'No errors'}`;
     result.style.display = 'block';
     setTimeout(() => loadFleet(), 3000);
   } catch(e) {
@@ -434,13 +499,29 @@ async function handleUpload(file) {
 }
 
 async function loadSources() {
-  const [sources, allowlistInfo] = await Promise.all([
-    api('/api/ingest/sources'),
-    api('/api/ingest/sources/allowlist'),
-  ]);
-  SOURCE_ALLOWLIST_INFO = allowlistInfo || null;
-  renderSourceAllowlistInfo(SOURCE_ALLOWLIST_INFO);
-  renderSourcesTable(sources);
+  const tbody = document.getElementById('sources-tbody');
+  try {
+    const [sources, allowlistInfo] = await Promise.all([
+      api('/api/ingest/sources'),
+      api('/api/ingest/sources/allowlist'),
+    ]);
+    SOURCE_ALLOWLIST_INFO = allowlistInfo || null;
+    renderSourceAllowlistInfo(SOURCE_ALLOWLIST_INFO);
+    renderSourcesTable(sources);
+  } catch (e) {
+    console.error('Sources load failed', e);
+    SOURCE_ALLOWLIST_INFO = null;
+    renderSourceAllowlistInfo(null);
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-muted" style="text-align:center;padding:32px">Failed to load API sources. Try again.</td></tr>';
+    }
+    const el = document.getElementById('source-validate-status');
+    if (el) {
+      el.className = 'source-validation source-validation-bad';
+      el.innerHTML = `<div class="source-validation-title">Source load failed</div><div>${esc(e.message)}</div>`;
+      el.style.display = 'block';
+    }
+  }
 }
 
 function renderSourcesTable(sources) {
@@ -451,14 +532,14 @@ function renderSourcesTable(sources) {
   }
   tbody.innerHTML = sources.map(s => `
     <tr>
-      <td><b>${s.name}</b></td>
-      <td class="text-muted text-sm" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${s.url_template}</td>
-      <td>${s.polling_interval_minutes}m</td>
+      <td><b>${esc(s.name)}</b></td>
+      <td class="text-muted text-sm" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(s.url_template)}</td>
+      <td>${asNumber(s.polling_interval_minutes, 10)}m</td>
       <td>${s.last_fetched_at ? timeAgo(s.last_fetched_at) : 'Never'}</td>
       <td><span class="badge ${s.enabled ? 'badge-ok' : ''}" style="${!s.enabled?'background:rgba(100,116,139,0.15);color:#64748b':''}">${s.enabled?'Active':'Paused'}</span></td>
       <td>
-        <button class="btn btn-sm btn-ghost" onclick="toggleSource(${s.id})">${s.enabled?'Pause':'Resume'}</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteSource(${s.id})" style="margin-left:6px">Delete</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleSource(${asNumber(s.id, 0)})">${s.enabled?'Pause':'Resume'}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteSource(${asNumber(s.id, 0)})" style="margin-left:6px">Delete</button>
       </td>
     </tr>`).join('');
 }
@@ -477,7 +558,7 @@ function renderSourceAllowlistInfo(info) {
   const configured = !!info.allowlist_configured;
   if (configured) {
     el.className = 'source-validation source-validation-ok';
-    el.innerHTML = `<div class="source-validation-title">Egress allowlist enabled</div><div>${allowlist.join(', ')}</div>`;
+    el.innerHTML = `<div class="source-validation-title">Egress allowlist enabled</div><div>${allowlist.map((entry) => esc(entry)).join(', ')}</div>`;
   } else {
     el.className = 'source-validation source-validation-warn';
     el.innerHTML = '<div class="source-validation-title">Egress allowlist is not configured</div><div>Set <code>API_SOURCE_ALLOWLIST</code> to enable external source ingestion.</div>';
@@ -500,14 +581,14 @@ function renderSourceValidationReport(report) {
   const host = report.hostname || 'unknown-host';
   const resolved = (report.resolved_ips || []).length ? report.resolved_ips.join(', ') : 'none';
   const blocked = (report.blocked_ips || []).length ? report.blocked_ips.join(', ') : 'none';
-  const errors = (report.errors || []).map(e => `• ${e}`).join('<br/>');
+  const errors = (report.errors || []).map(e => `• ${esc(e)}`).join('<br/>');
 
   if (report.valid) {
     el.className = 'source-validation source-validation-ok';
-    el.innerHTML = `<div class="source-validation-title">URL validation passed</div><div>Host: <b>${host}</b> | Resolved IPs: ${resolved}</div>`;
+    el.innerHTML = `<div class="source-validation-title">URL validation passed</div><div>Host: <b>${esc(host)}</b> | Resolved IPs: ${esc(resolved)}</div>`;
   } else {
     el.className = 'source-validation source-validation-bad';
-    el.innerHTML = `<div class="source-validation-title">URL validation failed</div><div>${errors || 'Unknown validation error'}</div><div style="margin-top:4px">Host: <b>${host}</b> | Resolved IPs: ${resolved} | Blocked: ${blocked}</div>`;
+    el.innerHTML = `<div class="source-validation-title">URL validation failed</div><div>${errors || 'Unknown validation error'}</div><div style="margin-top:4px">Host: <b>${esc(host)}</b> | Resolved IPs: ${esc(resolved)} | Blocked: ${esc(blocked)}</div>`;
   }
   el.style.display = 'block';
 }
@@ -548,7 +629,7 @@ document.getElementById('validate-source-btn')?.addEventListener('click', async 
     SOURCE_URL_VALIDATION = null;
     const el = document.getElementById('source-validate-status');
     el.className = 'source-validation source-validation-bad';
-    el.innerHTML = `<div class="source-validation-title">Validation request failed</div><div>${e.message}</div>`;
+    el.innerHTML = `<div class="source-validation-title">Validation request failed</div><div>${esc(e.message)}</div>`;
     el.style.display = 'block';
   } finally {
     btn.disabled = false;
@@ -597,7 +678,7 @@ document.getElementById('add-source-form')?.addEventListener('submit', async (e)
   } catch (err) {
     const el = document.getElementById('source-validate-status');
     el.className = 'source-validation source-validation-bad';
-    el.innerHTML = `<div class="source-validation-title">Save failed</div><div>${err.message}</div>`;
+    el.innerHTML = `<div class="source-validation-title">Save failed</div><div>${esc(err.message)}</div>`;
     el.style.display = 'block';
   } finally {
     submitBtn.disabled = false;
@@ -611,7 +692,7 @@ async function loadSettings() {
   const s = data.settings || {};
   const fields = [
     'smtp_host','smtp_port','smtp_user','smtp_password','alert_from_email','alert_to_emails',
-    'telegram_bot_token','telegram_chat_id','risk_threshold','alert_cooldown_hours',
+    'telegram_bot_token','telegram_chat_id','risk_threshold','alert_cooldown_hours','retrain_days',
     'policy_optimizer_enabled','automation_require_policy_backtest','policy_min_uplift_usd_per_miner',
     'hashprice_usd_per_ph_day','opex_usd_per_mwh','capex_usd_per_mwh',
     'energy_price_usd_per_kwh','energy_price_schedule_json','curtailment_windows_json',
@@ -620,7 +701,7 @@ async function loadSettings() {
   ];
   fields.forEach(k => {
     const el = document.getElementById(`setting-${k.replace(/_/g,'-')}`);
-    if (el) el.value = s[k] || '';
+    if (el) el.value = s[k] ?? '';
   });
 }
 
@@ -628,7 +709,7 @@ document.getElementById('settings-form')?.addEventListener('submit', async (e) =
   e.preventDefault();
   const fields = [
     'smtp_host','smtp_port','smtp_user','smtp_password','alert_from_email','alert_to_emails',
-    'telegram_bot_token','telegram_chat_id','risk_threshold','alert_cooldown_hours',
+    'telegram_bot_token','telegram_chat_id','risk_threshold','alert_cooldown_hours','retrain_days',
     'policy_optimizer_enabled','automation_require_policy_backtest','policy_min_uplift_usd_per_miner',
     'hashprice_usd_per_ph_day','opex_usd_per_mwh','capex_usd_per_mwh',
     'energy_price_usd_per_kwh','energy_price_schedule_json','curtailment_windows_json',
@@ -645,8 +726,18 @@ document.getElementById('settings-form')?.addEventListener('submit', async (e) =
 });
 
 // ── Init ───────────────────────────────────────────────────────────────────
-if (TOKEN) {
-  showApp();
-} else {
+async function bootstrapSession() {
+  try {
+    const me = await api('/api/auth/me', { suppressAuthRedirect: true });
+    if (me?.username) {
+      document.getElementById('sidebar-user').textContent = me.username;
+      showApp();
+      return;
+    }
+  } catch (e) {
+    console.warn('Session bootstrap failed', e);
+  }
   showLogin();
 }
+
+bootstrapSession();

@@ -4,7 +4,6 @@ import io
 import json
 import logging
 import os
-from typing import List
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -27,6 +26,7 @@ router = APIRouter()
 
 MAX_INGEST_FILE_BYTES = int(os.getenv("MAX_INGEST_FILE_BYTES", "10485760"))  # 10 MiB
 MAX_INGEST_ROWS = int(os.getenv("MAX_INGEST_ROWS", "200000"))
+INGEST_READ_CHUNK_BYTES = int(os.getenv("INGEST_READ_CHUNK_BYTES", "1048576"))
 
 REQUIRED_COLS = {"timestamp", "miner_id"}
 ALLOWED_COLS = {
@@ -57,25 +57,56 @@ TELEMETRY_JSON_COL_SPECS = [
     ("expected_hashrate_ths", "double precision"),
 ]
 TELEMETRY_INSERT_COLS = [col for col, _ in TELEMETRY_JSON_COL_SPECS]
-TELEMETRY_RECORDSET_DEF = ", ".join(
-    f"{col} {col_type}" for col, col_type in TELEMETRY_JSON_COL_SPECS
-)
-TELEMETRY_SELECT_COLS = ", ".join(TELEMETRY_INSERT_COLS)
-INGEST_JSON_INSERT_SQL = text(f"""
+INGEST_JSON_INSERT_SQL = text(
+    """
     WITH payload AS (
-        SELECT {TELEMETRY_SELECT_COLS}
-        FROM jsonb_to_recordset(CAST(:payload AS jsonb)) AS src({TELEMETRY_RECORDSET_DEF})
+        SELECT
+            timestamp, miner_id, asic_clock_mhz, asic_voltage_v,
+            asic_hashrate_ths, asic_temperature_c, asic_power_w,
+            operating_mode, ambient_temperature_c, chip_temp_max,
+            chip_temp_std, bad_hash_count, double_hash_count,
+            read_errors, event_codes, expected_hashrate_ths
+        FROM jsonb_to_recordset(CAST(:payload AS jsonb)) AS src(
+            timestamp timestamptz,
+            miner_id text,
+            asic_clock_mhz double precision,
+            asic_voltage_v double precision,
+            asic_hashrate_ths double precision,
+            asic_temperature_c double precision,
+            asic_power_w double precision,
+            operating_mode text,
+            ambient_temperature_c double precision,
+            chip_temp_max double precision,
+            chip_temp_std double precision,
+            bad_hash_count integer,
+            double_hash_count integer,
+            read_errors integer,
+            event_codes text,
+            expected_hashrate_ths double precision
+        )
     ),
     inserted AS (
-        INSERT INTO telemetry ({TELEMETRY_SELECT_COLS}, source)
-        SELECT {TELEMETRY_SELECT_COLS}, 'csv'
+        INSERT INTO telemetry (
+            timestamp, miner_id, asic_clock_mhz, asic_voltage_v,
+            asic_hashrate_ths, asic_temperature_c, asic_power_w,
+            operating_mode, ambient_temperature_c, chip_temp_max,
+            chip_temp_std, bad_hash_count, double_hash_count,
+            read_errors, event_codes, expected_hashrate_ths, source
+        )
+        SELECT
+            timestamp, miner_id, asic_clock_mhz, asic_voltage_v,
+            asic_hashrate_ths, asic_temperature_c, asic_power_w,
+            operating_mode, ambient_temperature_c, chip_temp_max,
+            chip_temp_std, bad_hash_count, double_hash_count,
+            read_errors, event_codes, expected_hashrate_ths, 'csv'
         FROM payload
         ON CONFLICT (miner_id, timestamp) DO NOTHING
         RETURNING 1
     )
     SELECT COUNT(*)::int AS inserted_rows
     FROM inserted
-""")
+    """
+)
 
 
 class SourceUrlValidationIn(BaseModel):
@@ -94,8 +125,8 @@ def _nullify_text_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _validate_and_clean(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
-    errors: List[str] = []
+def _validate_and_clean(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    errors: list[str] = []
     missing = REQUIRED_COLS - set(df.columns)
     if missing:
         raise HTTPException(400, f"CSV missing required columns: {missing}")
@@ -142,21 +173,33 @@ def _build_ingest_payload(df: pd.DataFrame) -> str:
     return json.dumps(records, allow_nan=False)
 
 
+async def _read_upload_with_limit(upload: UploadFile) -> bytes:
+    total = 0
+    chunks: list[bytes] = []
+    while True:
+        chunk = await upload.read(INGEST_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_INGEST_FILE_BYTES:
+            raise HTTPException(
+                413,
+                (
+                    f"CSV payload too large ({total} bytes). "
+                    f"Limit is {MAX_INGEST_FILE_BYTES} bytes."
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("/ingest/csv", response_model=IngestResult)
 async def ingest_csv(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
-    content = await file.read()
-    if len(content) > MAX_INGEST_FILE_BYTES:
-        raise HTTPException(
-            413,
-            (
-                f"CSV payload too large ({len(content)} bytes). "
-                f"Limit is {MAX_INGEST_FILE_BYTES} bytes."
-            ),
-        )
+    content = await _read_upload_with_limit(file)
     try:
         df = pd.read_csv(io.StringIO(content.decode("utf-8")))
     except Exception as exc:
@@ -241,13 +284,21 @@ async def create_source(
             INSERT INTO api_sources
                 (name, url_template, auth_headers, field_mapping,
                  polling_interval_minutes, enabled)
-            VALUES (:name, :url, :auth, :mapping, :interval, :enabled)
+            VALUES (
+                :name,
+                :url,
+                CAST(:auth AS jsonb),
+                CAST(:mapping AS jsonb),
+                :interval,
+                :enabled
+            )
             RETURNING id, name, url_template, auth_headers, field_mapping,
                       polling_interval_minutes, enabled, last_fetched_at, created_at
         """),
         {
             "name": body.name, "url": body.url_template,
-            "auth": body.auth_headers, "mapping": body.field_mapping,
+            "auth": json.dumps(body.auth_headers),
+            "mapping": json.dumps(body.field_mapping),
             "interval": body.polling_interval_minutes, "enabled": body.enabled,
         },
     )
@@ -261,11 +312,16 @@ async def delete_source(
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_token),
 ):
-    await db.execute(
-        text("DELETE FROM api_sources WHERE id = :id"), {"id": source_id}
+    result = await db.execute(
+        text("DELETE FROM api_sources WHERE id = :id RETURNING id"), {"id": source_id}
     )
+    row = result.mappings().first()
+    if row is None:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail="Source not found")
+
     await db.commit()
-    return {"status": "deleted", "id": source_id}
+    return {"status": "deleted", "id": row["id"]}
 
 
 @router.post("/ingest/sources/{source_id}/toggle")
@@ -281,6 +337,10 @@ async def toggle_source(
         """),
         {"id": source_id},
     )
-    await db.commit()
     row = result.mappings().first()
-    return dict(row) if row else {"error": "not found"}
+    if row is None:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    await db.commit()
+    return dict(row)

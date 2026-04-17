@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
-from config import (
+from src.config import (
     FEATURES_TELEMETRY_CSV_PATH,
     FEATURES_TELEMETRY_PARQUET_PATH,
     KPI_TELEMETRY_CSV_PATH,
@@ -60,7 +59,7 @@ TARGET_COLUMN = "failure_within_horizon"
 DEFAULT_COOLING_POWER_RATIO = 0.24
 
 
-def get_model_feature_columns() -> List[str]:
+def get_model_feature_columns() -> list[str]:
     """Return ordered list of model feature columns."""
 
     return BASE_MODEL_FEATURES + ENGINEERED_FEATURES + CATEGORICAL_FEATURES
@@ -186,9 +185,19 @@ def _build_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
         0.0, (working["asic_voltage_v"] - 12.8) / 12.8
     )
 
-    peer = working.groupby(["timestamp", "operating_mode"])[
-        ["asic_hashrate_ths", "asic_temperature_c", "true_efficiency_te"]
-    ].transform("mean")
+    peer_metric_cols = ["asic_hashrate_ths", "asic_temperature_c", "true_efficiency_te"]
+    peer_bucket = working["timestamp"].dt.floor("1h")
+    bucket_group = working.groupby([peer_bucket, "operating_mode"])
+    bucket_peer = bucket_group[peer_metric_cols].transform("mean")
+    bucket_counts = bucket_group["miner_id"].transform("size")
+    mode_peer = working.groupby("operating_mode")[peer_metric_cols].transform("mean")
+    peer = bucket_peer.where(bucket_counts.gt(1), mode_peer)
+    for col in peer_metric_cols:
+        peer[col] = peer[col].fillna(mode_peer[col])
+        if peer[col].isna().any():
+            peer[col] = peer[col].fillna(pd.to_numeric(working[col], errors="coerce").mean())
+        peer[col] = peer[col].fillna(0.0)
+
     working["mode_peer_hashrate_dev_pct"] = _safe_pct(
         working["asic_hashrate_ths"] - peer["asic_hashrate_ths"],
         peer["asic_hashrate_ths"],
@@ -212,7 +221,7 @@ def _build_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return working
 
 
-def engineer_features(df_with_kpi: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], Dict[str, object]]:
+def engineer_features(df_with_kpi: pd.DataFrame) -> tuple[pd.DataFrame, list[str], dict[str, object]]:
     """Build modeling features and return feature dataframe and summary."""
 
     prepared = _ensure_feature_input_columns(df_with_kpi)
@@ -256,7 +265,7 @@ def engineer_features(df_with_kpi: pd.DataFrame) -> Tuple[pd.DataFrame, List[str
 
 def build_serving_feature_snapshot(
     df_with_kpi: pd.DataFrame,
-    feature_cols: List[str] | None = None,
+    feature_cols: list[str] | None = None,
     cooling_power_ratio: float = DEFAULT_COOLING_POWER_RATIO,
 ) -> pd.DataFrame:
     """Build latest per-miner feature rows for online inference."""
@@ -290,14 +299,14 @@ def build_serving_feature_snapshot(
 
 def save_feature_outputs(
     features_df: pd.DataFrame,
-    summary: Dict[str, object],
+    summary: dict[str, object],
     summary_path: str | Path = PHASE4_FEATURE_SUMMARY_PATH,
     csv_path: str | Path = FEATURES_TELEMETRY_CSV_PATH,
     parquet_path: str | Path = FEATURES_TELEMETRY_PARQUET_PATH,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Persist feature dataset and summary."""
 
-    written: Dict[str, str] = {}
+    written: dict[str, str] = {}
 
     summary_out = Path(summary_path)
     summary_out.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +329,7 @@ def save_feature_outputs(
     return written
 
 
-def run_feature_engineering(df_with_kpi: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], Dict[str, object], Dict[str, str]]:
+def run_feature_engineering(df_with_kpi: pd.DataFrame) -> tuple[pd.DataFrame, list[str], dict[str, object], dict[str, str]]:
     """Full Phase 4 feature engineering workflow."""
 
     features_df, feature_cols, summary = engineer_features(df_with_kpi)

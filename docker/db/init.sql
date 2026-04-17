@@ -11,8 +11,14 @@ CREATE TABLE IF NOT EXISTS api_sources (
     polling_interval_minutes INTEGER DEFAULT 10,
     enabled BOOLEAN DEFAULT TRUE,
     last_fetched_at TIMESTAMPTZ,
+    fetch_failure_streak INTEGER NOT NULL DEFAULT 0,
+    last_fetch_attempt_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE api_sources
+    ADD COLUMN IF NOT EXISTS fetch_failure_streak INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE api_sources
+    ADD COLUMN IF NOT EXISTS last_fetch_attempt_at TIMESTAMPTZ;
 
 -- Raw telemetry from miners (hypertable)
 CREATE TABLE IF NOT EXISTS telemetry (
@@ -125,6 +131,7 @@ CREATE TABLE IF NOT EXISTS risk_predictions (
     model_version TEXT DEFAULT 'v1'
 );
 CREATE INDEX IF NOT EXISTS idx_risk_miner_time ON risk_predictions (miner_id, predicted_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_risk_predictions_miner_model ON risk_predictions (miner_id, model_version);
 
 -- Alerts
 CREATE TABLE IF NOT EXISTS alerts (

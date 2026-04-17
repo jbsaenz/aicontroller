@@ -3,6 +3,7 @@ import pandas as pd
 import random
 import subprocess
 import time
+import os
 from datetime import datetime, timedelta, timezone
 
 API_BASE = "http://localhost:8080"
@@ -11,12 +12,27 @@ CSV_PATH = "/tmp/large_fleet.csv"
 def print_step(msg):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] \033[1;36m{msg}\033[0m")
 
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Missing required environment variable: {name}. "
+            "Set script credentials before running."
+        )
+    return value
+
+
 def main():
     print_step("1. Authenticating to API")
-    res = requests.post(f"{API_BASE}/api/auth/login", json={"username": "admin", "password": "password12345"})
+    admin_username = _required_env("E2E_ADMIN_USERNAME")
+    admin_password = _required_env("E2E_ADMIN_PASSWORD")
+    session = requests.Session()
+    res = session.post(
+        f"{API_BASE}/api/auth/login",
+        json={"username": admin_username, "password": admin_password},
+    )
     res.raise_for_status()
-    token = res.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
     
     print_step("2. Generating 1,000 miners telemetry data")
     now = datetime.now(timezone.utc)
@@ -54,7 +70,7 @@ def main():
 
     print_step("3. Uploading payload (this might take a few seconds)")
     with open(CSV_PATH, "rb") as f:
-        res = requests.post(f"{API_BASE}/api/ingest/csv", files={"file": f}, headers=headers)
+        res = session.post(f"{API_BASE}/api/ingest/csv", files={"file": f})
     res.raise_for_status()
     print(f"✅ Ingestion successful: {res.json()['rows_inserted']} rows inserted.")
 
@@ -78,7 +94,7 @@ def main():
         print(f"Log Output:\n{result.stderr}")
     
     print_step("5. Checking DB for fleet status generation")
-    res = requests.get(f"{API_BASE}/api/fleet/summary", headers=headers)
+    res = session.get(f"{API_BASE}/api/fleet/summary")
     summary = res.json()
     print(f"📊 Dashboard Fleet Summary:\n"
           f"Total: {summary['total_miners']} | "
